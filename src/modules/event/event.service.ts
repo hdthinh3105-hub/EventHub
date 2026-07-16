@@ -7,6 +7,7 @@ import { CreateEventInput, UpdateEventInput, ListEventQuery } from './event.vali
 import { JwtPayload } from '../../utils/jwt';
 import { getOrSetCache, invalidateCache } from '../../utils/cache';
 import { uploadBufferToCloudinary } from '../../utils/uploadImage';
+import { writeAuditLog } from '../../utils/auditLog';
 
 const LIST_CACHE_TTL = 60; // 60s - danh sách event thay đổi không quá thường xuyên
 const DETAIL_CACHE_TTL = 120; // 120s - trang chi tiết ít bị sửa hơn danh sách
@@ -68,6 +69,16 @@ export const eventService = {
     // event mới này) -> xóa hết để lần đọc tiếp theo cache lại từ đầu.
     await invalidateCache('events:list:*');
 
+    // Ghi audit log KHÔNG "await" chặn response - đẩy xử lý xong xuôi
+    // rồi mới ghi, không delay client vì tác vụ phụ này.
+    void writeAuditLog({
+      userId: user.userId,
+      action: 'CREATE',
+      entityType: 'Event',
+      entityId: event.id,
+      newValue: event,
+    });
+
     return event;
   },
 
@@ -93,6 +104,19 @@ export const eventService = {
       invalidateCache('events:list:*'),
     ]);
 
+    // Ghi lại CẢ giá trị cũ lẫn mới - đây chính là giá trị thật của
+    // Audit Log so với chỉ ghi "đã sửa": khi có tranh chấp (VD Organizer
+    // khiếu nại "tôi không đổi giá vé"), bạn tra được CHÍNH XÁC đã đổi
+    // từ gì sang gì, ai đổi, lúc nào.
+    void writeAuditLog({
+      userId: user.userId,
+      action: 'UPDATE',
+      entityType: 'Event',
+      entityId: id,
+      oldValue: event,
+      newValue: updated,
+    });
+
     return updated;
   },
 
@@ -110,6 +134,14 @@ export const eventService = {
       invalidateCache(`events:detail:${id}`),
       invalidateCache('events:list:*'),
     ]);
+
+    void writeAuditLog({
+      userId: user.userId,
+      action: 'DELETE',
+      entityType: 'Event',
+      entityId: id,
+      oldValue: event,
+    });
 
     return result;
   },

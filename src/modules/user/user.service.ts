@@ -3,6 +3,7 @@ import { userRepository } from './user.repository';
 import { AppError } from '../../utils/apiResponse';
 import { AssignRoleInput } from './user.validation';
 import { JwtPayload } from '../../utils/jwt';
+import { writeAuditLog } from '../../utils/auditLog';
 
 export const userService = {
   list() {
@@ -30,6 +31,23 @@ export const userService = {
       throw new AppError('Role không tồn tại trong hệ thống', 400);
     }
 
-    return userRepository.updateRole(targetUserId, role.id);
+    const oldRoleName = targetUser.role.name;
+    const updated = await userRepository.updateRole(targetUserId, role.id);
+
+    // Đây là thao tác NHẠY CẢM NHẤT trong toàn hệ thống (đổi quyền hạn
+    // 1 tài khoản) - đáng ghi vết nhất trong mọi loại audit log. Ghi rõ
+    // cả role CŨ lẫn MỚI, ai là người thực hiện (actor.userId, không
+    // phải targetUserId) - đây chính là câu trả lời cho câu hỏi phỏng
+    // vấn "làm sao bạn biết ai đã cấp quyền Admin cho user X".
+    void writeAuditLog({
+      userId: actor.userId,
+      action: 'UPDATE',
+      entityType: 'User',
+      entityId: targetUserId,
+      oldValue: { role: oldRoleName },
+      newValue: { role: input.roleName },
+    });
+
+    return updated;
   },
 };
