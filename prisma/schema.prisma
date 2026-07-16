@@ -1,0 +1,323 @@
+// EventHub - Prisma Schema
+// Chuyển thể trực tiếp từ ERD Phase 2. Mọi quyết định thiết kế quan trọng
+// được ghi chú ngay tại chỗ để bạn hiểu "tại sao", không chỉ "cái gì".
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// AUTH & USER
+// ==========================================
+
+// Dùng bảng Role riêng thay vì enum cứng trong code.
+// Lý do: sau này nếu cần thêm role mới (VD: "Sponsor"), bạn chỉ insert
+// dữ liệu, không cần sửa code + deploy lại. Đây là điểm bạn nên nêu
+// khi được hỏi "tại sao không dùng enum cho đơn giản".
+model Role {
+  id    String @id @default(uuid())
+  name  String @unique // ADMIN | ORGANIZER | STAFF | CUSTOMER
+  users User[]
+
+  @@map("roles")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  roleId       String   @map("role_id")
+  role         Role     @relation(fields: [roleId], references: [id])
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  fullName     String   @map("full_name")
+  phone        String?
+  isVerified   Boolean  @default(false) @map("is_verified")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at") // soft delete
+
+  refreshTokens       RefreshToken[]
+  emailVerifications  EmailVerification[]
+  passwordResets      PasswordReset[]
+  organizedEvents     Event[]        @relation("EventOrganizer")
+  eventStaffAssigns   EventStaff[]
+  orders              Order[]
+  checkins            Checkin[]      @relation("CheckinStaff")
+  ticketHolds         TicketHold[]
+  auditLogs           AuditLog[]
+  notifications       Notification[]
+
+  @@index([email])
+  @@map("users")
+}
+
+// Refresh token lưu dạng hash (không lưu plaintext) để nếu DB bị lộ,
+// attacker vẫn không thể dùng trực tiếp token đó.
+// Câu hỏi phỏng vấn hay gặp: "Vì sao access token không lưu DB nhưng
+// refresh token phải lưu?" -> Access token sống ngắn (15p), không cần
+// thu hồi giữa chừng. Refresh token sống dài (7-30 ngày), cần khả năng
+// thu hồi (logout, đổi mật khẩu) -> bắt buộc phải lưu để kiểm tra/xoá.
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model EmailVerification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("email_verifications")
+}
+
+model PasswordReset {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("password_resets")
+}
+
+// ==========================================
+// EVENT
+// ==========================================
+
+model Category {
+  id     String  @id @default(uuid())
+  name   String  @unique
+  events Event[]
+
+  @@map("categories")
+}
+
+model Venue {
+  id       String  @id @default(uuid())
+  name     String
+  address  String
+  city     String
+  capacity Int?
+  events   Event[]
+
+  @@map("venues")
+}
+
+model Event {
+  id           String      @id @default(uuid())
+  organizerId  String      @map("organizer_id")
+  organizer    User        @relation("EventOrganizer", fields: [organizerId], references: [id])
+  categoryId   String      @map("category_id")
+  category     Category    @relation(fields: [categoryId], references: [id])
+  venueId      String      @map("venue_id")
+  venue        Venue       @relation(fields: [venueId], references: [id])
+  title        String
+  description  String?
+  coverImage   String?     @map("cover_image") // URL lưu trên MinIO/S3, xem Phase 10
+  startTime    DateTime    @map("start_time")
+  endTime      DateTime    @map("end_time")
+  status       EventStatus @default(DRAFT)
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+  deletedAt    DateTime?   @map("deleted_at")
+
+  eventStaff  EventStaff[]
+  ticketTypes TicketType[]
+
+  // Composite index: truy vấn phổ biến nhất là "sự kiện sắp diễn ra,
+  // đã publish" trên trang chủ -> lọc theo cả 2 cột cùng lúc.
+  @@index([startTime, status])
+  @@map("events")
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+  COMPLETED
+}
+
+// Bảng trung gian many-to-many giữa User (role Staff) và Event.
+// Thiết kế mở: sau này có thể thêm cột "permission" nếu muốn Staff
+// chỉ check-in được 1 khu vực cụ thể trong sự kiện.
+model EventStaff {
+  id        String   @id @default(uuid())
+  eventId   String   @map("event_id")
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([eventId, userId]) // 1 staff không bị gán trùng vào cùng 1 event
+  @@map("event_staff")
+}
+
+// ==========================================
+// TICKET
+// ==========================================
+
+// KHÔNG lưu trực tiếp "availableQuantity" có thể bị trừ tuỳ ý.
+// totalQuantity cố định, soldQuantity chỉ tăng khi order CONFIRMED thật.
+// available (tính toán) = totalQuantity - soldQuantity - tổng đang held.
+// Đây là nền tảng để chống race condition ở Phase 7.
+model TicketType {
+  id             String   @id @default(uuid())
+  eventId        String   @map("event_id")
+  event          Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name           String   // VIP, Standard...
+  price          Decimal  @db.Decimal(12, 2)
+  totalQuantity  Int      @map("total_quantity")
+  soldQuantity   Int      @default(0) @map("sold_quantity")
+  version        Int      @default(0) // optimistic locking, dùng ở Phase 7
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  ticketHolds TicketHold[]
+  orderItems  OrderItem[]
+
+  @@map("ticket_types")
+}
+
+// Dữ liệu SỐNG NGẮN (TTL 10 phút). Ở Phase 7 tôi sẽ hướng dẫn bạn
+// cân nhắc: giữ hoàn toàn trong Redis (nhanh, tự hết hạn qua TTL)
+// hay lưu cả Postgres (để truy vết/debug) - có ưu nhược điểm riêng.
+// Bảng này vẫn định nghĩa ở Postgres để bạn có lựa chọn linh hoạt.
+model TicketHold {
+  id           String     @id @default(uuid())
+  ticketTypeId String     @map("ticket_type_id")
+  ticketType   TicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Cascade)
+  userId       String     @map("user_id")
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quantity     Int
+  expiresAt    DateTime   @map("expires_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  // Index bắt buộc: job quét vé hết hạn chạy mỗi phút, cần quét nhanh
+  // theo expiresAt trên bảng có tần suất ghi/xoá rất cao.
+  @@index([expiresAt])
+  @@map("ticket_holds")
+}
+
+model Order {
+  id           String      @id @default(uuid())
+  userId       String      @map("user_id")
+  user         User        @relation(fields: [userId], references: [id])
+  totalAmount  Decimal     @map("total_amount") @db.Decimal(12, 2)
+  status       OrderStatus @default(PENDING)
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  orderItems OrderItem[]
+
+  @@index([userId])
+  @@map("orders")
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+model OrderItem {
+  id           String     @id @default(uuid())
+  orderId      String     @map("order_id")
+  order        Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  ticketTypeId String     @map("ticket_type_id")
+  ticketType   TicketType @relation(fields: [ticketTypeId], references: [id])
+  quantity     Int
+  unitPrice    Decimal    @map("unit_price") @db.Decimal(12, 2)
+
+  tickets Ticket[]
+
+  @@map("order_items")
+}
+
+// Mỗi vé là 1 dòng riêng biệt, có QR code riêng.
+// Lý do tách khỏi OrderItem: check-in xảy ra theo TỪNG VÉ, không theo
+// đơn hàng - nhóm 4 người mua chung 1 order nhưng check-in độc lập.
+model Ticket {
+  id           String   @id @default(uuid())
+  orderItemId  String   @map("order_item_id")
+  orderItem    OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  qrCode       String   @unique @map("qr_code")
+  isCheckedIn  Boolean  @default(false) @map("is_checked_in")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  checkins Checkin[]
+
+  // unique index bắt buộc: tra cứu lúc check-in phải cực nhanh,
+  // xếp hàng ở cổng sự kiện không ai muốn chờ.
+  @@index([qrCode])
+  @@map("tickets")
+}
+
+// Audit trail riêng biệt khỏi Ticket.isCheckedIn (boolean).
+// Boolean chỉ biết trạng thái HIỆN TẠI. Bảng này lưu LỊCH SỬ:
+// ai quét, lúc nào - quan trọng khi có tranh chấp hoặc cần audit.
+model Checkin {
+  id           String   @id @default(uuid())
+  ticketId     String   @map("ticket_id")
+  ticket       Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  staffId      String   @map("staff_id")
+  staff        User     @relation("CheckinStaff", fields: [staffId], references: [id])
+  checkedInAt  DateTime @default(now()) @map("checked_in_at")
+
+  @@map("checkins")
+}
+
+// ==========================================
+// VẬN HÀNH
+// ==========================================
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("notifications")
+}
+
+// Ghi lại: ai, làm gì, trên bảng nào, lúc nào.
+// Không bắt buộc cho MVP nhưng rất dễ ghi điểm phỏng vấn vì đây là
+// pattern hầu hết hệ thống doanh nghiệp thật đều có (banking, ecommerce).
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?  @map("user_id")
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String   // CREATE | UPDATE | DELETE
+  entityType String   @map("entity_type") // "Event", "TicketType"...
+  entityId   String   @map("entity_id")
+  oldValue   Json?    @map("old_value")
+  newValue   Json?    @map("new_value")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
