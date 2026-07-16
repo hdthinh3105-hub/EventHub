@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // Mở rộng "types" để VS Code (TypeScript Language Server) nhận diện
+    // được describe/it/expect/jest khi bạn MỞ FILE trong editor - đây
+    // là nguyên nhân duy nhất gây ra các gạch đỏ trong Problems panel.
+    // Không liên quan gì tới việc "npm test" chạy đúng hay sai (2 cơ chế
+    // hoàn toàn độc lập: 1 bên là editor tự kiểm tra để tô đỏ, 1 bên là
+    // Jest thực sự CHẠY code qua isolatedModules, không quan tâm "types").
+    "types": ["node", "jest"]
+  },
+  "include": ["**/*.ts"]
+}
