@@ -1,0 +1,61 @@
+name: CI
+
+# Chạy khi push lên nhánh main HOẶC khi tạo/cập nhật Pull Request nhắm
+# vào main - đây chính là "cổng chặn" trước khi code lỗi kịp merge vào
+# nhánh chính, đúng mục tiêu CI/CD đã đặt ra ở đầu Phase 16.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    # Biến môi trường GIẢ - chỉ cần ĐÚNG ĐỊNH DẠNG để qua bước validate
+    # của Zod (env.ts, Phase 3), KHÔNG cần kết nối thật tới Neon/Upstash/
+    # CloudAMQP/Cloudinary/Gmail. Bộ test hiện tại (Phase 14) chỉ dừng ở
+    # tầng middleware (401/400), không có test nào thực sự query DB hay
+    # gọi Redis/RabbitMQ thật - nên giá trị giả là đủ để chạy "npx tsc
+    # --noEmit" và "npm test" thành công trong môi trường CI cô lập.
+    env:
+      NODE_ENV: test
+      DATABASE_URL: 'postgresql://user:password@localhost:5432/eventhub_ci'
+      JWT_ACCESS_SECRET: 'ci_test_access_secret_at_least_32_characters_long'
+      JWT_REFRESH_SECRET: 'ci_test_refresh_secret_at_least_32_characters_long_x'
+      REDIS_URL: 'redis://localhost:6379'
+      RABBITMQ_URL: 'amqp://localhost'
+      GMAIL_USER: 'ci-test@example.com'
+      GMAIL_APP_PASSWORD: 'dummy_app_password'
+      CLOUDINARY_CLOUD_NAME: 'dummy_cloud'
+      CLOUDINARY_API_KEY: 'dummy_key'
+      CLOUDINARY_API_SECRET: 'dummy_secret'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cài đặt Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm' # cache node_modules giữa các lần chạy - build sau nhanh hơn hẳn
+
+      - name: Cài đặt package
+        run: npm ci
+
+      # BẮT BUỘC trước khi type-check hoặc build - code import "@prisma/client"
+      # cần type đã sinh sẵn từ schema.prisma, giống hệt nguyên tắc đã áp
+      # dụng trong Dockerfile (Phase 15).
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Kiểm tra type TypeScript (không build ra file)
+        run: npx tsc --noEmit
+
+      - name: Chạy test (Jest)
+        run: npm test
+
+      - name: Build production (đảm bảo build thật không lỗi)
+        run: npm run build
