@@ -1,0 +1,36 @@
+# docker-compose.yml
+#
+# Chỉ 1 service duy nhất - khác với kế hoạch ban đầu (Phase 1) là tự
+# host cả Postgres/Redis/RabbitMQ qua Docker Compose. Thực tế project
+# đã chuyển sang dùng dịch vụ CLOUD cho tất cả (Neon, Upstash, CloudAMQP,
+# Cloudinary) - container này chỉ cần kết nối RA NGOÀI qua các URL
+# trong .env, không cần container nào khác chạy cùng.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: eventhub-backend
+    restart: unless-stopped
+    ports:
+      - '4000:4000'
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+    # Chỉ định thẳng DNS server công cộng nhanh (Cloudflare + Google) -
+    # tránh phụ thuộc DNS resolver mặc định của Docker Desktop trên
+    # Windows (đôi khi chậm hơn hẳn do phải đi qua WSL2/Hyper-V NAT) -
+    # kết hợp với fix "dns.setDefaultResultOrder('ipv4first')" trong
+    # server.ts để giải quyết TRIỆT ĐỂ độ trễ kết nối ra ngoài.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:4000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

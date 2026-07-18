@@ -14,6 +14,21 @@ async function getEventOrThrow(eventId: string) {
   return event;
 }
 
+// Fix lỗ hổng phát hiện được: trước đây Organizer vẫn thêm/sửa/xóa
+// được loại vé cho 1 Event ĐÃ HỦY hoặc ĐÃ KẾT THÚC - về nghiệp vụ
+// không có ý nghĩa gì (sự kiện đã hủy thì thêm vé mới để làm gì, sự
+// kiện đã xong thì sửa giá vé cũ để làm gì) và dễ gây hiểu lầm dữ liệu
+// khi xem lại lịch sử. Dùng chung 1 hàm kiểm tra cho cả create/update/
+// remove, tránh lặp code 3 lần.
+function assertEventIsModifiable(event: { status: string }) {
+  if (event.status === 'CANCELLED' || event.status === 'COMPLETED') {
+    throw new AppError(
+      'Không thể thêm/sửa/xóa loại vé cho sự kiện đã hủy hoặc đã kết thúc',
+      409,
+    );
+  }
+}
+
 export const ticketTypeService = {
   listByEvent(eventId: string) {
     return ticketTypeRepository.findByEventId(eventId);
@@ -24,6 +39,7 @@ export const ticketTypeService = {
     // Quyền sở hữu TicketType = quyền sở hữu Event chứa nó -
     // tái sử dụng đúng logic đã viết ở Phase 6 phần Event, không lặp code.
     assertCanModifyEvent(event, user);
+    assertEventIsModifiable(event);
 
     return ticketTypeRepository.create(eventId, input);
   },
@@ -36,6 +52,7 @@ export const ticketTypeService = {
 
     const event = await getEventOrThrow(ticketType.eventId);
     assertCanModifyEvent(event, user);
+    assertEventIsModifiable(event);
 
     // Không cho giảm totalQuantity xuống thấp hơn số vé ĐÃ BÁN THẬT
     // (soldQuantity) - tránh tạo ra tình huống vô lý "đã bán 50 vé
@@ -59,6 +76,7 @@ export const ticketTypeService = {
 
     const event = await getEventOrThrow(ticketType.eventId);
     assertCanModifyEvent(event, user);
+    assertEventIsModifiable(event);
 
     // Không cho xóa loại vé đã có người mua - tránh mất dữ liệu lịch sử
     // giao dịch, ảnh hưởng tới vé đã phát hành cho khách.

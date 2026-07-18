@@ -1,5 +1,6 @@
 // src/modules/user/user.service.ts
 import { userRepository } from './user.repository';
+import { eventStaffRepository } from '../event-staff/event-staff.repository';
 import { AppError } from '../../utils/apiResponse';
 import { AssignRoleInput } from './user.validation';
 import { JwtPayload } from '../../utils/jwt';
@@ -29,6 +30,28 @@ export const userService = {
       // Về lý thuyết không xảy ra vì Zod enum đã giới hạn giá trị hợp lệ,
       // nhưng vẫn kiểm tra vì role có thể bị xóa nhầm khỏi DB.
       throw new AppError('Role không tồn tại trong hệ thống', 400);
+    }
+
+    // --- Ràng buộc phát hiện được từ thực tế sử dụng ---
+    // Nếu user hiện đang là STAFF và Admin muốn đổi họ sang role KHÁC,
+    // phải kiểm tra: họ có đang được gán vào Event nào không? Nếu có,
+    // CHẶN đổi role - bắt buộc Admin/Organizer phải chủ động gỡ khỏi
+    // từng Event trước (qua DELETE /event-staff/event/:eventId/user/:userId)
+    // rồi mới đổi role được. Lý do: nếu cho đổi tùy tiện, bản ghi
+    // EventStaff cũ vẫn còn tồn tại trong DB nhưng trỏ tới 1 user không
+    // còn quyền STAFF nữa - gây dữ liệu "mồ côi" và lỗ hổng logic phân
+    // quyền (checkin.service.ts dựa vào EventStaff để cấp quyền quét
+    // vé). Không dùng ON DELETE CASCADE ở tầng DB vì ta muốn Admin phải
+    // CHỦ ĐỘNG xác nhận qua 1 bước riêng, không âm thầm mất dữ liệu
+    // phân công chỉ vì đổi role.
+    if (targetUser.role.name === 'STAFF' && input.roleName !== 'STAFF') {
+      const assignedEventCount = await eventStaffRepository.countByUserId(targetUserId);
+      if (assignedEventCount > 0) {
+        throw new AppError(
+          `Không thể đổi role: user này đang được gán làm Staff cho ${assignedEventCount} sự kiện. Vui lòng gỡ khỏi tất cả sự kiện trước (DELETE /event-staff/event/:eventId/user/:userId) rồi mới đổi role.`,
+          409,
+        );
+      }
     }
 
     const oldRoleName = targetUser.role.name;

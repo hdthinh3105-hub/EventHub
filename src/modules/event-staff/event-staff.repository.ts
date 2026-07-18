@@ -32,4 +32,14 @@ export const eventStaffRepository = {
       where: { eventId_userId: { eventId, userId } },
     });
   },
+
+  // Dùng khi Admin đổi role 1 user (xem user.service.ts::assignRole) -
+  // đếm TỔNG số Event mà user này đang được gán làm Staff (không quan
+  // tâm event nào cụ thể). Nếu > 0, KHÔNG được phép đổi role người này
+  // đi nơi khác - tránh để lại bản ghi EventStaff "mồ côi" (trỏ tới 1
+  // user không còn là STAFF nữa, nhưng Check-in Service vẫn tin tưởng
+  // sai lệch rằng họ có quyền quét vé cho Event đó).
+  countByUserId(userId: string) {
+    return prisma.eventStaff.count({ where: { userId } });
+  },
 };

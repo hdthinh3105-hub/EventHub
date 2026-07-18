@@ -1,0 +1,22 @@
+# .dockerignore
+#
+# Giống hệt vai trò .gitignore nhưng cho Docker - loại trừ khỏi "build
+# context" (dữ liệu gửi tới Docker daemon khi build image). Quan trọng
+# nhất: loại .env - TUYỆT ĐỐI không được "bake" secret thật vào image,
+# vì image có thể bị đẩy lên registry công khai hoặc bị người khác pull
+# về xem lại từng layer.
+
+node_modules
+dist
+.env
+.env.local
+*.log
+logs
+.git
+.gitignore
+.vscode
+tests
+jest.config.js
+coverage
+socket-demo.html
+hold-body.json

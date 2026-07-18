@@ -1,6 +1,7 @@
 // src/modules/ticket-hold/ticket-hold.service.ts
 import { ticketHoldRepository } from './ticket-hold.repository';
 import { ticketTypeRepository } from '../ticket-type/ticket-type.repository';
+import { eventRepository } from '../event/event.repository';
 import { AppError } from '../../utils/apiResponse';
 import { CreateHoldInput } from './ticket-hold.validation';
 import { JwtPayload } from '../../utils/jwt';
@@ -10,6 +11,30 @@ const MAX_RETRY = 3;
 
 export const ticketHoldService = {
   async createHold(input: CreateHoldInput, user: JwtPayload) {
+    // --- Kiểm tra Event TRƯỚC KHI vào vòng lặp CAS ---
+    // Đây là fix cho lỗ hổng phát hiện được: trước đây service này CHỈ
+    // kiểm tra TicketType (còn vé không), hoàn toàn KHÔNG kiểm tra
+    // trạng thái Event chứa nó - hệ quả là khách vẫn giữ chỗ được cho
+    // 1 sự kiện còn đang DRAFT (chưa công bố), đã bị CANCELLED, hoặc
+    // đã qua startTime (đã diễn ra/đang diễn ra). Kiểm tra 1 LẦN DUY
+    // NHẤT ở đây (không đặt trong vòng lặp retry) vì status/startTime
+    // của Event không phải là dữ liệu có thể bị "race" như soldQuantity
+    // - không cần đọc lại mỗi lần retry.
+    const ticketTypeForEventCheck = await ticketTypeRepository.findById(input.ticketTypeId);
+    if (!ticketTypeForEventCheck) {
+      throw new AppError('Không tìm thấy loại vé', 404);
+    }
+    const event = await eventRepository.findById(ticketTypeForEventCheck.eventId);
+    if (!event) {
+      throw new AppError('Không tìm thấy sự kiện', 404);
+    }
+    if (event.status !== 'PUBLISHED') {
+      throw new AppError('Sự kiện chưa mở bán hoặc đã bị hủy/kết thúc', 409);
+    }
+    if (event.startTime <= new Date()) {
+      throw new AppError('Sự kiện đã bắt đầu hoặc đã diễn ra, không thể đặt vé', 409);
+    }
+
     for (let attempt = 0; attempt < MAX_RETRY; attempt++) {
       // Bước 1: đọc dữ liệu MỚI NHẤT ở đầu mỗi vòng lặp - không được cache
       // lại từ vòng lặp trước, vì đó chính xác là nguồn gốc của race condition.

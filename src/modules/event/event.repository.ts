@@ -54,7 +54,18 @@ export const eventRepository = {
     const where: Prisma.EventWhereInput = {
       deletedAt: null,
       ...(query.categoryId && { categoryId: query.categoryId }),
-      ...(query.status && { status: query.status }),
+      // --- Fix lỗ hổng phát hiện được ---
+      // Trước đây KHÔNG có filter status mặc định - Event còn DRAFT
+      // (Organizer đang soạn thảo, chưa "Publish") vẫn hiện công khai
+      // trong danh sách, khách vẫn thấy và mua được. Mặc định CHỈ hiện
+      // PUBLISHED khi client không chỉ định status rõ ràng - đây là
+      // "an toàn theo mặc định" (secure by default) cho trang duyệt
+      // công khai. Nếu client CHỦ ĐỘNG truyền ?status=DRAFT, vẫn cho
+      // xem được (vì route này chưa có auth để phân biệt "chủ sở hữu"
+      // - đây là giới hạn kiến trúc đã biết, cần route "GET /my-events"
+      // riêng có auth để khắc phục triệt để trong tương lai, không nằm
+      // trong phạm vi sửa lần này).
+      status: query.status ?? 'PUBLISHED',
       ...(searchedIds && { id: { in: searchedIds } }),
     };
 

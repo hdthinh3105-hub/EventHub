@@ -68,18 +68,22 @@ export const authRepository = {
     });
   },
 
-  markEmailVerificationUsed(id: string) {
-    return prisma.emailVerification.update({
-      where: { id },
-      data: { usedAt: new Date() },
-    });
-  },
-
-  markUserVerified(userId: string) {
-    return prisma.user.update({
-      where: { id: userId },
-      data: { isVerified: true },
-    });
+  // Gộp "đánh dấu user đã xác thực" + "đánh dấu token đã dùng" vào 1
+  // TRANSACTION THẬT (không phải Promise.all riêng lẻ như bản trước) -
+  // đảm bảo CẢ 2 cùng thành công hoặc CẢ 2 cùng thất bại. Nếu chỉ dùng
+  // Promise.all, có tình huống hiếm nhưng có thật: câu update đầu
+  // thành công, câu thứ 2 lỗi (VD DB tạm gián đoạn) - token vẫn ở
+  // trạng thái "chưa dùng", có thể bị verify lại lần nữa trong thời
+  // gian còn hiệu lực (24h) dù user đã được đánh dấu isVerified rồi -
+  // không gây hại nghiêm trọng nhưng là điểm không nhất quán dữ liệu.
+  verifyEmailTransactionally(params: { userId: string; verificationId: string }) {
+    return prisma.$transaction([
+      prisma.user.update({ where: { id: params.userId }, data: { isVerified: true } }),
+      prisma.emailVerification.update({
+        where: { id: params.verificationId },
+        data: { usedAt: new Date() },
+      }),
+    ]);
   },
 
   // --- Password Reset ---
@@ -93,17 +97,34 @@ export const authRepository = {
     });
   },
 
-  markPasswordResetUsed(id: string) {
-    return prisma.passwordReset.update({
-      where: { id },
-      data: { usedAt: new Date() },
-    });
-  },
-
-  updatePassword(userId: string, passwordHash: string) {
-    return prisma.user.update({
-      where: { id: userId },
-      data: { passwordHash },
-    });
+  // Gộp 3 thao tác vào 1 TRANSACTION THẬT: (1) đổi mật khẩu, (2) đánh
+  // dấu token reset đã dùng, (3) THU HỒI TOÀN BỘ refresh token đang
+  // hiệu lực của user này. Điểm (3) là fix bảo mật quan trọng phát
+  // hiện được từ thực tế: trước đây resetPassword đổi mật khẩu xong
+  // nhưng KHÔNG thu hồi session cũ - nếu tài khoản bị chiếm đoạt và
+  // chủ tài khoản đổi mật khẩu để "đuổi" kẻ xâm nhập, kẻ đó vẫn giữ
+  // được refreshToken cũ, tiếp tục gọi /auth/refresh lấy access token
+  // mới, VẪN TRUY CẬP ĐƯỢC dù mật khẩu đã đổi. Đổi mật khẩu PHẢI đồng
+  // nghĩa với "đăng xuất mọi nơi", đây là hành vi chuẩn của mọi hệ
+  // thống nghiêm túc (Google, Facebook đều làm vậy).
+  resetPasswordTransactionally(params: {
+    userId: string;
+    passwordHash: string;
+    passwordResetId: string;
+  }) {
+    return prisma.$transaction([
+      prisma.user.update({
+        where: { id: params.userId },
+        data: { passwordHash: params.passwordHash },
+      }),
+      prisma.passwordReset.update({
+        where: { id: params.passwordResetId },
+        data: { usedAt: new Date() },
+      }),
+      prisma.refreshToken.updateMany({
+        where: { userId: params.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
   },
 };

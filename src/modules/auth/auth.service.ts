@@ -169,10 +169,12 @@ export const authService = {
       throw new AppError('Mã xác thực đã hết hạn', 400);
     }
 
-    await Promise.all([
-      authRepository.markUserVerified(record.userId),
-      authRepository.markEmailVerificationUsed(record.id),
-    ]);
+    // Transaction thật thay vì Promise.all - xem giải thích chi tiết
+    // trong auth.repository.ts::verifyEmailTransactionally
+    await authRepository.verifyEmailTransactionally({
+      userId: record.userId,
+      verificationId: record.id,
+    });
   },
 
   async forgotPassword(email: string) {
@@ -204,9 +206,17 @@ export const authService = {
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    await Promise.all([
-      authRepository.updatePassword(record.userId, passwordHash),
-      authRepository.markPasswordResetUsed(record.id),
-    ]);
+
+    // Transaction thật gộp 3 việc: đổi mật khẩu + đánh dấu token đã
+    // dùng + THU HỒI TOÀN BỘ refresh token đang hiệu lực của user này
+    // (fix bảo mật quan trọng - xem giải thích trong auth.repository.ts).
+    // Hệ quả: sau khi đổi mật khẩu thành công, MỌI thiết bị đang đăng
+    // nhập (kể cả chính chủ) đều bị đăng xuất, phải login lại bằng
+    // mật khẩu mới - đây là hành vi ĐÚNG và AN TOÀN, không phải bug.
+    await authRepository.resetPasswordTransactionally({
+      userId: record.userId,
+      passwordHash,
+      passwordResetId: record.id,
+    });
   },
 };

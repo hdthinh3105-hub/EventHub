@@ -2,6 +2,7 @@
 import { eventRepository } from './event.repository';
 import { categoryRepository } from '../category/category.repository';
 import { venueRepository } from '../venue/venue.repository';
+import { ticketTypeRepository } from '../ticket-type/ticket-type.repository';
 import { AppError } from '../../utils/apiResponse';
 import { CreateEventInput, UpdateEventInput, ListEventQuery } from './event.validation';
 import { JwtPayload } from '../../utils/jwt';
@@ -9,13 +10,9 @@ import { getOrSetCache, invalidateCache } from '../../utils/cache';
 import { uploadBufferToCloudinary } from '../../utils/uploadImage';
 import { writeAuditLog } from '../../utils/auditLog';
 
-const LIST_CACHE_TTL = 60; // 60s - danh sách event thay đổi không quá thường xuyên
-const DETAIL_CACHE_TTL = 120; // 120s - trang chi tiết ít bị sửa hơn danh sách
+const LIST_CACHE_TTL = 60;
+const DETAIL_CACHE_TTL = 120;
 
-// Hàm dùng chung: kiểm tra quyền sở hữu Event.
-// Đây chính là "Resource-based Authorization" - khác với requireRole
-// (chỉ biết role), hàm này biết CỤ THỂ ai sở hữu resource nào.
-// ADMIN được bỏ qua kiểm tra vì Admin quản lý toàn hệ thống.
 export function assertCanModifyEvent(
   event: { organizerId: string },
   user: JwtPayload,
@@ -28,9 +25,6 @@ export function assertCanModifyEvent(
 
 export const eventService = {
   async list(query: ListEventQuery) {
-    // Cache key PHẢI bao gồm mọi tham số ảnh hưởng tới kết quả - khác
-    // trang, khác filter thì phải là cache key khác, nếu không user A
-    // filter theo category X sẽ vô tình thấy cache của category Y.
     const cacheKey = `events:list:${JSON.stringify(query)}`;
 
     return getOrSetCache(cacheKey, LIST_CACHE_TTL, async () => {
@@ -65,12 +59,8 @@ export const eventService = {
 
     const event = await eventRepository.create({ ...input, organizerId: user.userId });
 
-    // Có Event mới -> mọi cache danh sách hiện tại đã LỖI THỜI (thiếu
-    // event mới này) -> xóa hết để lần đọc tiếp theo cache lại từ đầu.
     await invalidateCache('events:list:*');
 
-    // Ghi audit log KHÔNG "await" chặn response - đẩy xử lý xong xuôi
-    // rồi mới ghi, không delay client vì tác vụ phụ này.
     void writeAuditLog({
       userId: user.userId,
       action: 'CREATE',
@@ -90,24 +80,31 @@ export const eventService = {
 
     assertCanModifyEvent(event, user);
 
-    if (input.endTime && input.startTime && input.endTime <= input.startTime) {
-      throw new AppError('Thời gian kết thúc phải sau thời gian bắt đầu', 400);
+    // --- Fix lỗ hổng phát hiện được ---
+    // Bản trước CHỈ kiểm tra "endTime <= startTime" khi CẢ HAI field
+    // cùng có mặt trong body PATCH. Nếu Organizer chỉ gửi 1 trong 2
+    // field (VD chỉ sửa endTime), điều kiện bị bỏ qua hoàn toàn vì
+    // input.startTime là undefined - cho phép lưu 1 khoảng thời gian
+    // vô lý (endTime trước startTime ĐÃ LƯU SẴN trong DB) mà không hề
+    // hay biết. Sửa đúng bằng cách LUÔN so sánh với giá trị HIỆN CÓ
+    // trong DB nếu field đó không được gửi lên - đây chính là nguyên
+    // tắc "validate dựa trên trạng thái CUỐI CÙNG sau khi áp dụng thay
+    // đổi", không phải chỉ validate riêng lẻ các field mới gửi lên.
+    if (input.startTime !== undefined || input.endTime !== undefined) {
+      const effectiveStart = input.startTime ?? event.startTime;
+      const effectiveEnd = input.endTime ?? event.endTime;
+      if (effectiveEnd <= effectiveStart) {
+        throw new AppError('Thời gian kết thúc phải sau thời gian bắt đầu', 400);
+      }
     }
 
     const updated = await eventRepository.update(id, input);
 
-    // Xóa CẢ cache chi tiết của đúng event này LẪN mọi cache danh sách
-    // (vì event có thể đổi status/title làm nó xuất hiện/biến mất khỏi
-    // 1 trang danh sách có filter cụ thể).
     await Promise.all([
       invalidateCache(`events:detail:${id}`),
       invalidateCache('events:list:*'),
     ]);
 
-    // Ghi lại CẢ giá trị cũ lẫn mới - đây chính là giá trị thật của
-    // Audit Log so với chỉ ghi "đã sửa": khi có tranh chấp (VD Organizer
-    // khiếu nại "tôi không đổi giá vé"), bạn tra được CHÍNH XÁC đã đổi
-    // từ gì sang gì, ai đổi, lúc nào.
     void writeAuditLog({
       userId: user.userId,
       action: 'UPDATE',
@@ -127,6 +124,23 @@ export const eventService = {
     }
 
     assertCanModifyEvent(event, user);
+
+    // --- Fix lỗ hổng phát hiện được ---
+    // Trước đây KHÔNG kiểm tra gì trước khi soft-delete - Event đã bán
+    // vé vẫn "biến mất" khỏi GET /events/:id ngay lập tức (404), dù
+    // khách đã thanh toán thật, vé vẫn nằm trong "orders". Áp dụng
+    // ĐÚNG nguyên tắc đã dùng nhất quán cho TicketType/Category/Venue:
+    // chặn xóa khi còn dữ liệu giao dịch phụ thuộc. Tổng hợp
+    // soldQuantity từ MỌI TicketType của Event này - chỉ cần 1 loại vé
+    // có người mua là đủ để chặn.
+    const ticketTypes = await ticketTypeRepository.findByEventId(id);
+    const totalSold = ticketTypes.reduce((sum, tt) => sum + tt.soldQuantity, 0);
+    if (totalSold > 0) {
+      throw new AppError(
+        `Không thể xóa sự kiện đã có ${totalSold} vé được bán. Hãy chuyển trạng thái sang CANCELLED thay vì xóa, để giữ lại lịch sử giao dịch cho khách hàng.`,
+        409,
+      );
+    }
 
     const result = await eventRepository.softDelete(id);
 
@@ -152,8 +166,6 @@ export const eventService = {
       throw new AppError('Không tìm thấy sự kiện', 404);
     }
 
-    // Cùng cơ chế Resource-based Authorization đã dùng cho update/remove -
-    // chỉ chủ sự kiện (hoặc Admin) mới được đổi ảnh bìa.
     assertCanModifyEvent(event, user);
 
     const { url } = await uploadBufferToCloudinary(fileBuffer, 'eventhub/events');

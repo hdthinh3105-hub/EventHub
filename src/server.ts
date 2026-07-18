@@ -4,6 +4,18 @@
 // Trách nhiệm duy nhất của file này: khởi động server + xử lý tắt server
 // một cách "graceful" (an toàn) - điều mà rất nhiều Junior bỏ qua.
 
+import dns from 'dns';
+// Ép Node.js ưu tiên kết quả IPv4 khi phân giải DNS - sửa lỗi hiệu năng
+// NỔI TIẾNG của musl libc (dùng trong node:alpine, image Docker ta
+// đang chạy): mặc định Node thử IPv6 (AAAA record) TRƯỚC, chờ timeout
+// rồi mới fallback về IPv4 - với 1 app kết nối ra 5+ dịch vụ cloud
+// khác nhau (Neon, Upstash, CloudAMQP, Cloudinary, Gmail), độ trễ này
+// cộng dồn RẤT rõ rệt, đúng là nguyên nhân chính khiến container "chậm
+// hơn hẳn" so với chạy trực tiếp bằng "npm run dev" (không bị ảnh
+// hưởng bởi image Docker vì chạy thẳng trên Windows). Phải gọi TRƯỚC
+// bất kỳ import nào khác có thể mở kết nối mạng (database.ts, redis.ts...).
+dns.setDefaultResultOrder('ipv4first');
+
 import http from 'http';
 import app from './app';
 import { env } from './config/env';

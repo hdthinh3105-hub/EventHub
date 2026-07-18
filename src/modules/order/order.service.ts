@@ -17,12 +17,7 @@ import { notificationRepository } from '../notification/notification.repository'
 import { logger } from '../../utils/logger';
 
 // Helper đọc giá trị 1 cell Excel ra CHUỖI THUẦN, xử lý đúng các trường
-// hợp ExcelJS trả về OBJECT thay vì string thuần - lỗi rất hay gặp và
-// dễ bị bỏ sót: khi Excel/WPS tự động format 1 ô thành hyperlink (phổ
-// biến với email, URL), giá trị cell không còn là string mà là
-// { text, hyperlink }. Gọi String(cellValue) trực tiếp trên object này
-// sẽ luôn ra "[object Object]" - một lỗi ÂM THẦM, không throw exception
-// nên rất dễ lọt qua test nếu không kiểm tra kỹ dữ liệu thực tế.
+// hợp ExcelJS trả về OBJECT thay vì string thuần.
 function cellToString(value: ExcelJS.CellValue): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value.trim();
@@ -62,6 +57,21 @@ export const orderService = {
       throw new AppError('Phiên giữ chỗ đã hết hạn, vui lòng giữ chỗ lại', 410);
     }
 
+    // --- Fix lỗ hổng phát hiện được: fetch Event NGAY TỪ ĐẦU (trước
+    // khi chạy transaction checkout), không phải sau như bản trước. ---
+    // Tình huống thật: khách giữ chỗ lúc Event còn PUBLISHED, nhưng
+    // TRONG 10 phút giữ chỗ, Organizer lỡ hủy Event (status ->
+    // CANCELLED). Nếu không kiểm tra lại tại đây, khách vẫn thanh toán
+    // thành công, hệ thống vẫn phát hành vé + trừ soldQuantity cho 1
+    // sự kiện ĐÃ BỊ HỦY - vé phát ra vô nghĩa, dữ liệu doanh thu sai.
+    const event = await eventRepository.findById(hold.ticketType.eventId);
+    if (!event) {
+      throw new AppError('Không tìm thấy sự kiện', 404);
+    }
+    if (event.status === 'CANCELLED' || event.status === 'COMPLETED') {
+      throw new AppError('Sự kiện đã bị hủy hoặc đã kết thúc, không thể thanh toán', 409);
+    }
+
     const { order, tickets } = await orderRepository.checkout({
       holdId: hold.id,
       ticketTypeId: hold.ticketTypeId,
@@ -71,17 +81,12 @@ export const orderService = {
     });
 
     // Đẩy việc gửi email vào queue - KHÔNG "await" chờ email gửi xong,
-    // chỉ đẩy message rồi đi tiếp. Đây chính là điểm khiến API trả
-    // response NGAY LẬP TỨC cho user, đúng mục tiêu đặt ra ở Phase 9.1.
-    // Lấy thêm thông tin event/user CẦN cho nội dung email - không có
-    // sẵn trong kết quả checkout() vì Repository chỉ trả đúng dữ liệu
-    // giao dịch (Order/Ticket), không kèm thông tin hiển thị.
-    const [event, fullUser] = await Promise.all([
-      eventRepository.findById(hold.ticketType.eventId),
-      userRepository.findById(user.userId),
-    ]);
+    // chỉ đẩy message rồi đi tiếp. Lấy thêm thông tin user cần cho nội
+    // dung email (event đã có sẵn từ bước kiểm tra phía trên, không
+    // cần query lại lần nữa).
+    const fullUser = await userRepository.findById(user.userId);
 
-    if (event && fullUser) {
+    if (fullUser) {
       publishTicketEmail({
         to: fullUser.email,
         eventTitle: event.title,
@@ -92,15 +97,8 @@ export const orderService = {
       });
 
       // --- Realtime: báo cho Organizer đang xem dashboard biết ngay ---
-      // newSoldQuantity tính TỪ GIÁ TRỊ ĐÃ ĐỌC TRƯỚC KHI checkout() tăng
-      // (hold.ticketType.soldQuantity) + số vé vừa bán - không cần query
-      // lại DB, tránh tốn thêm round-trip chỉ để lấy 1 con số có thể tự
-      // tính được từ dữ liệu đã có sẵn trong scope.
       const newSoldQuantity = hold.ticketType.soldQuantity + hold.quantity;
 
-      // socket.io "try-catch" ngầm: nếu getIO() throw (Socket.IO chưa
-      // init - không nên xảy ra vì server.ts luôn initSocket() trước khi
-      // nhận request), KHÔNG được làm hỏng luồng checkout đã thành công.
       try {
         getIO().to(`event:${event.id}`).emit('ticket_sold', {
           ticketTypeId: hold.ticketTypeId,
@@ -113,9 +111,6 @@ export const orderService = {
         logger.error(`[Socket.IO] Lỗi emit ticket_sold: ${err}`);
       }
 
-      // Ghi lại Notification THẬT vào DB (không chỉ emit "ảo" qua socket)
-      // - để Organizer vẫn xem lại được lịch sử thông báo dù lúc bán vé
-      // họ không đang mở dashboard (không kết nối Socket.IO tại thời điểm đó).
       await notificationRepository.create({
         userId: event.organizerId,
         title: 'Có vé mới được bán',
@@ -132,8 +127,6 @@ export const orderService = {
     if (!event) {
       throw new AppError('Không tìm thấy sự kiện', 404);
     }
-    // Cùng cơ chế Resource-based Authorization - chỉ chủ Event (hoặc
-    // Admin) mới xem được báo cáo doanh thu của chính sự kiện đó.
     assertCanModifyEvent(event, user);
 
     const orderItems = await orderRepository.findOrderItemsByEventId(eventId);
@@ -151,7 +144,7 @@ export const orderService = {
       { header: 'Thành tiền', key: 'total', width: 14 },
       { header: 'Ngày mua', key: 'createdAt', width: 20 },
     ];
-    sheet.getRow(1).font = { bold: true }; // in đậm dòng tiêu đề cho dễ đọc
+    sheet.getRow(1).font = { bold: true };
 
     let totalRevenue = 0;
     for (const item of orderItems) {
@@ -169,7 +162,6 @@ export const orderService = {
       });
     }
 
-    // Dòng trống + dòng tổng kết ở cuối file
     sheet.addRow({});
     const summaryRow = sheet.addRow({ ticketType: 'TỔNG DOANH THU', total: totalRevenue });
     summaryRow.font = { bold: true };
@@ -195,7 +187,12 @@ export const orderService = {
     }
     assertCanModifyEvent(event, user);
 
-    // --- Đọc file Excel từ buffer ---
+    // Fix lỗ hổng phát hiện được (cùng nhóm với TicketType CRUD) -
+    // không cho nhập vé mời cho sự kiện đã hủy/đã kết thúc.
+    if (event.status === 'CANCELLED' || event.status === 'COMPLETED') {
+      throw new AppError('Không thể nhập vé mời cho sự kiện đã hủy hoặc đã kết thúc', 409);
+    }
+
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(fileBuffer as unknown as ExcelJS.Buffer);
     const sheet = workbook.worksheets[0];
@@ -203,15 +200,14 @@ export const orderService = {
       throw new AppError('File Excel không có sheet nào', 400);
     }
 
-    // Quy ước cột: A=Họ tên, B=Email, C=Số lượng - dòng 1 là header, bỏ qua
     const rows: { fullName: string; email: string; quantity: number }[] = [];
     sheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return; // bỏ header
+      if (rowNumber === 1) return;
       const fullName = cellToString(row.getCell(1).value);
       const email = cellToString(row.getCell(2).value);
       const quantity = Number(row.getCell(3).value ?? 1);
 
-      if (!fullName || !email) return; // bỏ qua dòng trống
+      if (!fullName || !email) return;
       rows.push({ fullName, email, quantity: quantity > 0 ? quantity : 1 });
     });
 
@@ -219,11 +215,6 @@ export const orderService = {
       throw new AppError('Không tìm thấy dữ liệu hợp lệ trong file Excel', 400);
     }
 
-    // --- Kiểm tra sức chứa TRƯỚC KHI tạo bất kỳ dữ liệu nào ---
-    // Đây là "kiểm tra trước, ghi sau" đơn giản (không cần Optimistic
-    // Locking như Phase 7) - vì import là thao tác NỘI BỘ do Admin/
-    // Organizer chủ động thực hiện 1 lần, không phải hàng nghìn user
-    // công khai tranh chấp đồng thời như luồng đặt vé công khai.
     const totalRequested = rows.reduce((sum, r) => sum + r.quantity, 0);
     const available = ticketType.totalQuantity - ticketType.soldQuantity;
     if (totalRequested > available) {
@@ -233,7 +224,6 @@ export const orderService = {
       );
     }
 
-    // --- Tìm hoặc tạo User cho từng email trong file ---
     const guestRole = await authRepository.findRoleByName('CUSTOMER');
     if (!guestRole) {
       throw new AppError('Hệ thống chưa sẵn sàng (thiếu role CUSTOMER)', 500);
@@ -243,13 +233,6 @@ export const orderService = {
     for (const row of rows) {
       let existingUser = await authRepository.findUserByEmail(row.email);
       if (!existingUser) {
-        // Khách mời chưa có tài khoản - tạo mới với mật khẩu ngẫu nhiên.
-        // Họ KHÔNG CẦN mật khẩu này để nhận vé - vé (kèm QR code) được
-        // gửi thẳng qua email ngay bên dưới, giống hệt cách hệ thống vé
-        // thật hoạt động (Ticketbox, Eventbrite): email chính là bằng
-        // chứng sở hữu vé, không bắt buộc phải đăng nhập mới xem được.
-        // Nếu sau này khách muốn đăng nhập xem lịch sử vé, họ dùng chức
-        // năng "Quên mật khẩu" để tự đặt mật khẩu mới.
         const randomPassword = crypto.randomBytes(16).toString('hex');
         const passwordHash = await bcrypt.hash(randomPassword, 10);
         existingUser = await authRepository.createUser({
@@ -264,9 +247,6 @@ export const orderService = {
 
     const results = await orderRepository.bulkImportGuestTickets(ticketTypeId, guests);
 
-    // Gửi email vé cho TỪNG khách mời - "results" và "rows" cùng thứ tự
-    // (1-1 tương ứng theo đúng vòng lặp đã xử lý ở trên), nên zip theo
-    // index là an toàn để lấy đúng email/tên của từng người.
     results.forEach((result, index) => {
       const row = rows[index];
       if (!row) return;
@@ -275,7 +255,7 @@ export const orderService = {
         eventTitle: event.title,
         ticketTypeName: ticketType.name,
         quantity: row.quantity,
-        totalAmount: 0, // vé mời - miễn phí
+        totalAmount: 0,
         tickets: result.tickets.map((t) => ({ id: t.id, qrCode: t.qrCode })),
       });
     });
