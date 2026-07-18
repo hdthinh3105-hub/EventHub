@@ -6,7 +6,8 @@
     // là nguyên nhân duy nhất gây ra các gạch đỏ trong Problems panel.
     // Không liên quan gì tới việc "npm test" chạy đúng hay sai (2 cơ chế
     // hoàn toàn độc lập: 1 bên là editor tự kiểm tra để tô đỏ, 1 bên là
-    // Jest thực sự CHẠY code qua isolatedModules, không quan tâm "types").
+    // Jest thực sự CHẠY code qua isolatedModules của ts-jest, không
+    // quan tâm "types" khai báo ở tsconfig nào cả).
     "types": ["node", "jest"]
   },
   "include": ["**/*.ts"]

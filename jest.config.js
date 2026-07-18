@@ -1,16 +1,25 @@
 // jest.config.js
 //
-// isolatedModules: true - đây là điểm mấu chốt sửa lỗi "Cannot find
-// name describe/it/expect". Mặc định ts-jest chạy TypeScript Compiler
-// đầy đủ (bao gồm kiểm tra TYPE, tôn trọng đúng "types" trong
-// tsconfig.json - vốn bị giới hạn chỉ ["node"] để bảo vệ code sản
-// phẩm). Bật isolatedModules chuyển ts-jest sang chế độ TRANSPILE THUẦN
-// (giống Babel) - chỉ chuyển .ts -> .js, KHÔNG kiểm tra type/global
-// nữa, nên không còn quan tâm "types" trong tsconfig có khai báo "jest"
-// hay không. Đánh đổi: mất kiểm tra type khi chạy test (nếu code test
-// có lỗi type thật sự, Jest không báo mà vẫn chạy) - chấp nhận được vì
-// mục tiêu chính của các bài test này là kiểm chứng HÀNH VI runtime,
-// không phải kiểm tra kiểu tĩnh (việc đó đã có "npx tsc --noEmit" lo).
+// QUAN TRỌNG: "isolatedModules" ở đây (truyền cho ts-jest qua transform
+// option) là MỘT THỨ HOÀN TOÀN KHÁC với "isolatedModules" trong
+// tsconfig.json (compiler option gốc của TypeScript).
+//
+// - tsconfig.json > compilerOptions.isolatedModules: chỉ đảm bảo mỗi
+//   file .ts biên dịch độc lập được (ràng buộc cú pháp), KHÔNG tắt
+//   type-checking.
+// - ts-jest's isolatedModules (đặt ở đây): bắt ts-jest chạy chế độ
+//   TRANSPILE-ONLY (giống Babel) - bỏ HẲN bước kiểm tra type/global,
+//   đây mới là thứ khiến global của Jest (describe/it/expect/jest...)
+//   không bị báo lỗi "Cannot find name" khi tsconfig.json gốc (dùng
+//   cho code sản phẩm trong src/) có "types": ["node"] và loại trừ
+//   hẳn thư mục "tests" ra khỏi phạm vi biên dịch.
+//
+// Nhầm lẫn giữa 2 khái niệm trùng tên này là nguyên nhân của lỗi
+// "Cannot find name 'jest'/'describe'/'it'/'expect'" khi cấu hình bị
+// chuyển nhầm sang chỉ đặt trong tsconfig.json. ts-jest có cảnh báo
+// deprecated cho cách khai báo dưới đây ở bản mới, nhưng đây vẫn LÀ
+// CÁCH DUY NHẤT hoạt động đúng cho tới khi ts-jest hỗ trợ đầy đủ cách
+// thay thế - ưu tiên "chạy đúng" hơn "hết cảnh báo".
 
 /** @type {import('ts-jest').JestConfigWithTsJest} */
 module.exports = {

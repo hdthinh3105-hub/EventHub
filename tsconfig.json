@@ -29,6 +29,17 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
 
+    // LƯU Ý: cờ "isolatedModules" ở ĐÂY là compiler option GỐC của
+    // TypeScript - chỉ đảm bảo mỗi file .ts biên dịch độc lập được,
+    // KHÔNG liên quan và KHÔNG tắt type-checking của ts-jest khi chạy
+    // test. Cấu hình thực sự khiến ts-jest bỏ qua type-check (transpile
+    // thuần, giống Babel) nằm ở jest.config.js (transform option của
+    // ts-jest), đó mới là nơi cần đặt "isolatedModules: true" để test
+    // chạy được mà không cần global Jest (describe/it/expect) khai báo
+    // trong phạm vi biên dịch của tsconfig.json này (vốn loại trừ hẳn
+    // thư mục "tests" và chỉ khai báo types: ["node"]).
+    "isolatedModules": true,
+
     // Absolute imports
     "paths": {
       "@/*": ["./src/*"]
