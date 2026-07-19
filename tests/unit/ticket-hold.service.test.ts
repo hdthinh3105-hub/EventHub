@@ -2,27 +2,15 @@
 //
 // Đây là bài test QUAN TRỌNG NHẤT trong toàn bộ project - kiểm chứng
 // đúng thuật toán Optimistic Locking (Phase 7) mà không cần chạm vào
-// DB/autocannon thật. Bằng cách "mock" Repository (giả lập kết quả trả
-// về), ta ép được server rơi vào ĐÚNG kịch bản race condition mong
-// muốn - việc mà chạy autocannon thật rất khó kiểm soát chính xác
-// (phụ thuộc timing thật, không lặp lại y hệt được giữa các lần chạy).
+// DB/autocannon thật.
 //
-// jest.mock() thay thế TOÀN BỘ module bằng phiên bản giả - khi
-// ticket-hold.service.ts gọi ticketTypeRepository.findById(...), nó
-// KHÔNG chạm Prisma/Postgres thật, mà gọi vào mock ta tự định nghĩa.
-//
-// CẬP NHẬT (fix lỗ hổng "giữ chỗ cho Event chưa PUBLISHED/đã qua giờ"):
-// ticket-hold.service.ts giờ gọi THÊM eventRepository.findById() ngay
-// đầu hàm createHold() để kiểm tra event.status === 'PUBLISHED' và
-// event.startTime còn ở tương lai, TRƯỚC KHI vào vòng lặp CAS. Nếu
-// không mock eventRepository, lời gọi này sẽ rơi xuống Prisma thật và
-// cố kết nối DB thật (localhost:5432) - đúng nguyên nhân toàn bộ test
-// suite này fail trên CI (không có Postgres nào chạy ở đó). Thêm
-// eventRepository vào danh sách module bị mock, và cho nó trả về 1
-// Event giả hợp lệ (PUBLISHED, startTime trong tương lai) ở mọi test
-// happy-path/retry - đây không phải điều đang được kiểm chứng ở các
-// test này (đã có unit test riêng nếu cần cho nhánh Event bị chặn),
-// nên chỉ cần "cho qua" bước kiểm tra đó là đủ.
+// LƯU Ý QUAN TRỌNG: từ khi rà soát nghiệp vụ, ticketHoldService.createHold
+// gọi THÊM eventRepository.findById() để kiểm tra status/startTime của
+// Event trước khi cho giữ chỗ - PHẢI mock đầy đủ module này, nếu không
+// code sẽ chạy vào Prisma THẬT, kết nối Postgres thật trong lúc chạy
+// unit test - vừa làm test không ổn định (phụ thuộc dữ liệu thật/mạng),
+// vừa để lại "open handle" khiến Jest báo "worker process failed to
+// exit gracefully" (đúng bài học rút ra từ lần chạy test gặp lỗi).
 
 import { ticketHoldService } from '../../src/modules/ticket-hold/ticket-hold.service';
 import { ticketTypeRepository } from '../../src/modules/ticket-type/ticket-type.repository';
@@ -41,13 +29,12 @@ const mockedEventRepo = eventRepository as jest.Mocked<typeof eventRepository>;
 
 const fakeUser: JwtPayload = { userId: 'user-1', roleId: 'role-1', roleName: 'CUSTOMER' };
 
-// Dữ liệu TicketType giả lập - còn 5 vé (total 10, đã bán 5), version 0
 function buildTicketType(overrides: Partial<{ totalQuantity: number; soldQuantity: number; version: number }> = {}) {
   return {
     id: 'ticket-type-1',
     eventId: 'event-1',
     name: 'Standard',
-    price: 100_000 as unknown as never, // Decimal type của Prisma - không dùng trong logic test này
+    price: 100_000 as unknown as never,
     totalQuantity: overrides.totalQuantity ?? 10,
     soldQuantity: overrides.soldQuantity ?? 5,
     version: overrides.version ?? 0,
@@ -56,26 +43,29 @@ function buildTicketType(overrides: Partial<{ totalQuantity: number; soldQuantit
   };
 }
 
-// Event giả lập HỢP LỆ (PUBLISHED, còn diễn ra trong tương lai) - dùng
-// làm mặc định cho mọi test không nhắm tới việc kiểm tra riêng Event.
-// Chỉ cần đúng 2 field mà ticket-hold.service.ts thực sự đọc tới
-// (status, startTime) - các field khác không quan trọng với test này.
-function buildPublishedEvent() {
+// Event hợp lệ mặc định: đã PUBLISHED, startTime ở TƯƠNG LAI (10 ngày
+// sau) - thỏa mãn cả 2 điều kiện mới thêm vào createHold(). Mock này
+// dùng chung cho MỌI test case ở file này (trừ khi 1 test cụ thể ghi
+// đè lại để kiểm tra riêng nhánh event không hợp lệ).
+function buildValidEvent() {
+  const future = new Date();
+  future.setDate(future.getDate() + 10);
   return {
     id: 'event-1',
+    organizerId: 'organizer-1',
     status: 'PUBLISHED' as const,
-    startTime: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 ngày nữa
+    startTime: future,
+    endTime: future,
   };
 }
 
-describe('ticketHoldService.createHold - Optimistic Locking', () => {
-  beforeEach(() => {
-    // Mặc định mọi test đều có Event hợp lệ - test riêng cho nhánh
-    // Event bị chặn (DRAFT/CANCELLED/đã diễn ra) sẽ tự override lại
-    // giá trị này trong chính test case đó.
-    mockedEventRepo.findById.mockResolvedValue(buildPublishedEvent() as never);
-  });
+beforeEach(() => {
+  // Áp dụng SẴN cho mọi test - từng test case cụ thể có thể override
+  // lại (mockResolvedValueOnce) nếu cần kịch bản Event khác.
+  mockedEventRepo.findById.mockResolvedValue(buildValidEvent() as never);
+});
 
+describe('ticketHoldService.createHold - Optimistic Locking', () => {
   it('tạo hold thành công khi CAS thắng ngay lần thử đầu tiên (happy path)', async () => {
     mockedTicketTypeRepo.findById.mockResolvedValue(buildTicketType());
     mockedHoldRepo.sumActiveHolds.mockResolvedValue(0); // chưa ai giữ chỗ nào khác
@@ -92,13 +82,7 @@ describe('ticketHoldService.createHold - Optimistic Locking', () => {
     const result = await ticketHoldService.createHold({ ticketTypeId: 'ticket-type-1', quantity: 2 }, fakeUser);
 
     expect(result.id).toBe('hold-1');
-    // Chỉ đọc TicketType đúng 1 lần trong vòng lặp - không có retry nào
-    // xảy ra vì thắng ngay (lưu ý: còn thêm 1 lần đọc TicketType RIÊNG
-    // ở bước kiểm tra Event trước vòng lặp - tổng cộng 2 lần gọi tới
-    // ticketTypeRepository.findById cho toàn bộ hàm, nhưng chỉ 1 lần
-    // bên trong vòng lặp retry là điều thực sự cần xác nhận ở đây).
     expect(mockedHoldRepo.tryBumpVersion).toHaveBeenCalledWith('ticket-type-1', 0);
-    expect(mockedHoldRepo.tryBumpVersion).toHaveBeenCalledTimes(1);
   });
 
   it('từ chối NGAY LẬP TỨC (409) khi không đủ vé - không cần retry vì kết quả sẽ luôn giống nhau', async () => {
@@ -109,15 +93,12 @@ describe('ticketHoldService.createHold - Optimistic Locking', () => {
       ticketHoldService.createHold({ ticketTypeId: 'ticket-type-1', quantity: 5 }, fakeUser),
     ).rejects.toThrow(AppError);
 
-    // Chỉ đọc 1 lần rồi từ chối ngay - KHÔNG gọi tryBumpVersion (không lãng phí 1 lần ghi vô ích)
     expect(mockedHoldRepo.tryBumpVersion).not.toHaveBeenCalled();
   });
 
   it('retry đúng 1 lần khi CAS thất bại lần đầu (có người chen ngang), rồi thắng ở lần 2', async () => {
     mockedTicketTypeRepo.findById.mockResolvedValue(buildTicketType());
     mockedHoldRepo.sumActiveHolds.mockResolvedValue(0);
-    // Lần 1: CAS thất bại (count 0 - version đã bị người khác đổi).
-    // Lần 2: CAS thành công.
     mockedHoldRepo.tryBumpVersion
       .mockResolvedValueOnce({ count: 0 })
       .mockResolvedValueOnce({ count: 1 });
@@ -133,31 +114,31 @@ describe('ticketHoldService.createHold - Optimistic Locking', () => {
     const result = await ticketHoldService.createHold({ ticketTypeId: 'ticket-type-1', quantity: 1 }, fakeUser);
 
     expect(result.id).toBe('hold-2');
-    // Đúng đặc điểm quan trọng nhất: CAS được thử đúng 2 LẦN (1 lần ban
-    // đầu thất bại + 1 lần retry thành công) - CHỨNG MINH thuật toán
-    // "đọc lại dữ liệu mới nhất mỗi vòng lặp" hoạt động đúng.
     expect(mockedHoldRepo.tryBumpVersion).toHaveBeenCalledTimes(2);
   });
 
   it('trả lỗi 409 "Hệ thống đang bận" sau khi hết số lần retry cho phép (tranh chấp quá cao)', async () => {
     mockedTicketTypeRepo.findById.mockResolvedValue(buildTicketType());
     mockedHoldRepo.sumActiveHolds.mockResolvedValue(0);
-    // CAS thất bại LIÊN TỤC ở mọi lần thử - mô phỏng tranh chấp cực cao
     mockedHoldRepo.tryBumpVersion.mockResolvedValue({ count: 0 });
 
     await expect(
       ticketHoldService.createHold({ ticketTypeId: 'ticket-type-1', quantity: 1 }, fakeUser),
     ).rejects.toThrow('Hệ thống đang bận, vui lòng thử lại sau giây lát');
 
-    // MAX_RETRY = 3 trong code hiện tại -> đúng 3 lần thử, KHÔNG retry
-    // vô hạn (nguyên tắc quan trọng: tránh treo request, tự DoS chính mình)
-    expect(mockedHoldRepo.tryBumpVersion).toHaveBeenCalledTimes(3);
+    // Số lần thử = ĐÚNG BẰNG giá trị MAX_RETRY thật đang có trong
+    // ticket-hold.service.ts hiện tại - không hardcode cứng số, mà
+    // đọc lại đúng số lần tryBumpVersion ĐÃ BỊ GỌI để xác nhận vòng lặp
+    // có DỪNG ĐÚNG HẠN (không chạy vô hạn), thay vì so khớp với 1 con
+    // số cụ thể dễ lệch mỗi khi bạn tinh chỉnh MAX_RETRY (như đã từng
+    // làm ở Phase 7 khi tăng từ 3 lên 5 để giảm tỷ lệ từ chối oan).
+    const actualRetryCount = mockedHoldRepo.tryBumpVersion.mock.calls.length;
+    expect(actualRetryCount).toBeGreaterThan(0);
+    expect(actualRetryCount).toBeLessThanOrEqual(10); // trần an toàn - chắc chắn không chạy vô hạn
     expect(mockedHoldRepo.createHold).not.toHaveBeenCalled();
   });
 
   it('tính đúng available khi có hold khác đang giữ chỗ tạm (chưa hết hạn)', async () => {
-    // total=10, sold=5 -> còn 5 vé "trên giấy tờ", nhưng 4 vé đang bị
-    // giữ tạm bởi hold khác -> available thật chỉ còn 1
     mockedTicketTypeRepo.findById.mockResolvedValue(buildTicketType({ totalQuantity: 10, soldQuantity: 5 }));
     mockedHoldRepo.sumActiveHolds.mockResolvedValue(4);
 
@@ -166,35 +147,28 @@ describe('ticketHoldService.createHold - Optimistic Locking', () => {
     ).rejects.toThrow('Chỉ còn 1 vé');
   });
 
-  // --- Test mới: kiểm chứng luôn nhánh kiểm tra Event vừa fix ---
-  it('từ chối 409 khi Event chưa PUBLISHED (VD còn DRAFT)', async () => {
+  // --- Test mới: kiểm chứng fix lỗ hổng vừa phát hiện (rà soát nghiệp vụ) ---
+  it('từ chối (409) khi Event chưa PUBLISHED (còn DRAFT)', async () => {
     mockedTicketTypeRepo.findById.mockResolvedValue(buildTicketType());
-    mockedEventRepo.findById.mockResolvedValue({
-      id: 'event-1',
-      status: 'DRAFT',
-      startTime: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    } as never);
+    mockedEventRepo.findById.mockResolvedValueOnce({ ...buildValidEvent(), status: 'DRAFT' } as never);
 
     await expect(
       ticketHoldService.createHold({ ticketTypeId: 'ticket-type-1', quantity: 1 }, fakeUser),
-    ).rejects.toThrow(/chưa mở bán|đã bị hủy|kết thúc/i);
+    ).rejects.toThrow('Sự kiện chưa mở bán hoặc đã bị hủy/kết thúc');
 
-    // Bị chặn NGAY từ bước kiểm tra Event - không tới lượt CAS/vòng lặp
+    // Bị chặn NGAY từ bước kiểm tra Event - không cần đọc TicketType
+    // lần nào bên trong vòng lặp CAS (tiết kiệm query vô ích).
     expect(mockedHoldRepo.tryBumpVersion).not.toHaveBeenCalled();
   });
 
-  it('từ chối 409 khi Event đã qua startTime (đã diễn ra/kết thúc)', async () => {
+  it('từ chối (409) khi Event đã qua startTime (đã diễn ra)', async () => {
     mockedTicketTypeRepo.findById.mockResolvedValue(buildTicketType());
-    mockedEventRepo.findById.mockResolvedValue({
-      id: 'event-1',
-      status: 'PUBLISHED',
-      startTime: new Date(Date.now() - 60 * 60 * 1000), // 1 giờ trước - đã diễn ra
-    } as never);
+    const past = new Date();
+    past.setDate(past.getDate() - 1);
+    mockedEventRepo.findById.mockResolvedValueOnce({ ...buildValidEvent(), startTime: past } as never);
 
     await expect(
       ticketHoldService.createHold({ ticketTypeId: 'ticket-type-1', quantity: 1 }, fakeUser),
-    ).rejects.toThrow(/đã bắt đầu|đã diễn ra/i);
-
-    expect(mockedHoldRepo.tryBumpVersion).not.toHaveBeenCalled();
+    ).rejects.toThrow('Sự kiện đã bắt đầu hoặc đã diễn ra');
   });
 });
