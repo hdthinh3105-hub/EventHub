@@ -3,6 +3,7 @@
 Backend API cho nền tảng đặt vé sự kiện (kiểu Ticketbox/Eventbrite thu nhỏ), xây dựng để luyện tập và chứng minh năng lực xử lý các bài toán backend thật: **race condition khi nhiều người tranh mua vé cuối cùng, RBAC + Resource-based Authorization, xử lý bất đồng bộ (message queue), caching, realtime, và vận hành hạ tầng (Docker/CI-CD/Monitoring)**.
 
 > Dự án không phải 1 CRUD app thông thường — mỗi quyết định kỹ thuật đều xuất phát từ 1 bài toán nghiệp vụ có thật, được ghi chú ngay trong code.
+> Link Demo: https://eventhub-1lf8.onrender.com
 
 ---
 
@@ -194,7 +195,7 @@ erDiagram
 
 ### Chạy local (dev)
 ```bash
-git clone <repo-url>
+git clone https://github.com/hdthinh3105-hub/EventHub.git
 cd eventhub-backend
 npm install
 cp .env.example .env   # điền đầy đủ giá trị thật (xem bảng biến môi trường bên dưới)
