@@ -15,9 +15,8 @@ import { publishTicketEmail } from '../../queues/email.queue';
 import { getIO } from '../../config/socket';
 import { notificationRepository } from '../notification/notification.repository';
 import { logger } from '../../utils/logger';
+import { ticketsSoldCounter } from '../../config/metrics';
 
-// Helper đọc giá trị 1 cell Excel ra CHUỖI THUẦN, xử lý đúng các trường
-// hợp ExcelJS trả về OBJECT thay vì string thuần.
 function cellToString(value: ExcelJS.CellValue): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value.trim();
@@ -44,26 +43,14 @@ export const orderService = {
       throw new AppError('Không tìm thấy phiên giữ chỗ', 404);
     }
 
-    // Chỉ chính chủ hold mới được checkout - tránh user A thanh toán
-    // hộ (hoặc phá) hold của user B nếu lỡ đoán được holdId.
     if (hold.userId !== user.userId) {
       throw new AppError('Bạn không có quyền thanh toán phiên giữ chỗ này', 403);
     }
 
-    // Hold đã hết hạn - dù job dọn dẹp (Phase 7.4) có thể chưa kịp xóa,
-    // ta VẪN PHẢI tự kiểm tra expiresAt ở đây - không được tin tưởng
-    // "hold còn tồn tại trong DB" đồng nghĩa "còn hiệu lực".
     if (hold.expiresAt < new Date()) {
       throw new AppError('Phiên giữ chỗ đã hết hạn, vui lòng giữ chỗ lại', 410);
     }
 
-    // --- Fix lỗ hổng phát hiện được: fetch Event NGAY TỪ ĐẦU (trước
-    // khi chạy transaction checkout), không phải sau như bản trước. ---
-    // Tình huống thật: khách giữ chỗ lúc Event còn PUBLISHED, nhưng
-    // TRONG 10 phút giữ chỗ, Organizer lỡ hủy Event (status ->
-    // CANCELLED). Nếu không kiểm tra lại tại đây, khách vẫn thanh toán
-    // thành công, hệ thống vẫn phát hành vé + trừ soldQuantity cho 1
-    // sự kiện ĐÃ BỊ HỦY - vé phát ra vô nghĩa, dữ liệu doanh thu sai.
     const event = await eventRepository.findById(hold.ticketType.eventId);
     if (!event) {
       throw new AppError('Không tìm thấy sự kiện', 404);
@@ -80,10 +67,13 @@ export const orderService = {
       unitPrice: Number(hold.ticketType.price),
     });
 
-    // Đẩy việc gửi email vào queue - KHÔNG "await" chờ email gửi xong,
-    // chỉ đẩy message rồi đi tiếp. Lấy thêm thông tin user cần cho nội
-    // dung email (event đã có sẵn từ bước kiểm tra phía trên, không
-    // cần query lại lần nữa).
+    // --- Metric: đếm tổng số vé bán thành công qua checkout thật.
+    // Đặt NGAY SAU transaction thành công - nếu transaction throw lỗi
+    // giữa chừng, dòng này không bao giờ chạy tới, đảm bảo con số này
+    // luôn khớp đúng với số vé THẬT SỰ tồn tại trong DB, không bị đếm
+    // "hụt hơi" hay đếm khống.
+    ticketsSoldCounter.inc(hold.quantity);
+
     const fullUser = await userRepository.findById(user.userId);
 
     if (fullUser) {
@@ -96,7 +86,6 @@ export const orderService = {
         tickets: tickets.map((t) => ({ id: t.id, qrCode: t.qrCode })),
       });
 
-      // --- Realtime: báo cho Organizer đang xem dashboard biết ngay ---
       const newSoldQuantity = hold.ticketType.soldQuantity + hold.quantity;
 
       try {
@@ -121,7 +110,6 @@ export const orderService = {
     return { order, tickets };
   },
 
-  // --- EXPORT: xuất báo cáo doanh thu 1 Event ra file Excel ---
   async exportEventRevenue(eventId: string, user: JwtPayload): Promise<Buffer> {
     const event = await eventRepository.findById(eventId);
     if (!event) {
@@ -170,7 +158,6 @@ export const orderService = {
     return Buffer.from(arrayBuffer);
   },
 
-  // --- IMPORT: nhập danh sách vé mời hàng loạt từ file Excel ---
   async importGuestList(
     ticketTypeId: string,
     fileBuffer: Buffer,
@@ -187,8 +174,6 @@ export const orderService = {
     }
     assertCanModifyEvent(event, user);
 
-    // Fix lỗ hổng phát hiện được (cùng nhóm với TicketType CRUD) -
-    // không cho nhập vé mời cho sự kiện đã hủy/đã kết thúc.
     if (event.status === 'CANCELLED' || event.status === 'COMPLETED') {
       throw new AppError('Không thể nhập vé mời cho sự kiện đã hủy hoặc đã kết thúc', 409);
     }
@@ -246,6 +231,11 @@ export const orderService = {
     }
 
     const results = await orderRepository.bulkImportGuestTickets(ticketTypeId, guests);
+
+    // Vé mời cũng là vé PHÁT HÀNH THẬT - tính vào cùng metric tổng số
+    // vé đã bán để Grafana phản ánh đúng tổng lượng vé đang lưu hành,
+    // dù không thu tiền (khác totalAmount trong Order, vẫn = 0 như thiết kế).
+    ticketsSoldCounter.inc(totalRequested);
 
     results.forEach((result, index) => {
       const row = rows[index];

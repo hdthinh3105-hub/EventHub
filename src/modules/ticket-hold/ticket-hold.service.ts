@@ -5,21 +5,13 @@ import { eventRepository } from '../event/event.repository';
 import { AppError } from '../../utils/apiResponse';
 import { CreateHoldInput } from './ticket-hold.validation';
 import { JwtPayload } from '../../utils/jwt';
+import { holdRejectedCounter } from '../../config/metrics';
 
 const HOLD_DURATION_MS = 10 * 60 * 1000; // 10 phút, khớp thiết kế Phase 2
-const MAX_RETRY = 3;
+const MAX_RETRY = 5;
 
 export const ticketHoldService = {
   async createHold(input: CreateHoldInput, user: JwtPayload) {
-    // --- Kiểm tra Event TRƯỚC KHI vào vòng lặp CAS ---
-    // Đây là fix cho lỗ hổng phát hiện được: trước đây service này CHỈ
-    // kiểm tra TicketType (còn vé không), hoàn toàn KHÔNG kiểm tra
-    // trạng thái Event chứa nó - hệ quả là khách vẫn giữ chỗ được cho
-    // 1 sự kiện còn đang DRAFT (chưa công bố), đã bị CANCELLED, hoặc
-    // đã qua startTime (đã diễn ra/đang diễn ra). Kiểm tra 1 LẦN DUY
-    // NHẤT ở đây (không đặt trong vòng lặp retry) vì status/startTime
-    // của Event không phải là dữ liệu có thể bị "race" như soldQuantity
-    // - không cần đọc lại mỗi lần retry.
     const ticketTypeForEventCheck = await ticketTypeRepository.findById(input.ticketTypeId);
     if (!ticketTypeForEventCheck) {
       throw new AppError('Không tìm thấy loại vé', 404);
@@ -36,35 +28,31 @@ export const ticketHoldService = {
     }
 
     for (let attempt = 0; attempt < MAX_RETRY; attempt++) {
-      // Bước 1: đọc dữ liệu MỚI NHẤT ở đầu mỗi vòng lặp - không được cache
-      // lại từ vòng lặp trước, vì đó chính xác là nguồn gốc của race condition.
       const ticketType = await ticketTypeRepository.findById(input.ticketTypeId);
       if (!ticketType) {
         throw new AppError('Không tìm thấy loại vé', 404);
       }
 
-      // Bước 2 + 3: tính available = tổng - đã bán - đang giữ chỗ tạm
       const activeHeld = await ticketHoldRepository.sumActiveHolds(input.ticketTypeId);
       const available = ticketType.totalQuantity - ticketType.soldQuantity - activeHeld;
 
-      // Bước 4: hết vé thật sự - từ chối ngay, KHÔNG cần retry vì retry
-      // cũng sẽ ra kết quả tương tự (trừ khi có người khác vừa hủy hold,
-      // nhưng đó là edge case chấp nhận được - user chỉ cần thử lại request).
       if (input.quantity > available) {
+        // --- Metric: đếm lần từ chối do THẬT SỰ hết vé (khác với "hết
+        // lượt retry" ở dưới cuối hàm) - 2 label khác nhau giúp Grafana
+        // phân biệt được "sự kiện đang hot, cháy vé thật" (out_of_stock
+        // tăng đều) với "hệ thống đang bị nghẽn kỹ thuật" (contention
+        // tăng vọt bất thường) - đây là 2 hướng xử lý HOÀN TOÀN khác
+        // nhau nếu Organizer/DevOps phải phản ứng.
+        holdRejectedCounter.inc({ reason: 'out_of_stock' });
         throw new AppError(`Chỉ còn ${available} vé, không đủ để giữ ${input.quantity} vé`, 409);
       }
 
-      // Bước 5: thử "đặt cọc" quyền ghi bằng CAS trên cột version
       const bumpResult = await ticketHoldRepository.tryBumpVersion(ticketType.id, ticketType.version);
 
       if (bumpResult.count === 0) {
-        // Ai đó đã ghi (tạo hold khác) xen giữa lúc ta đọc (bước 1) và ghi
-        // (bước 5) - version đã đổi, CAS thất bại. Không throw lỗi ngay,
-        // quay lại đầu vòng lặp để đọc dữ liệu mới nhất và thử lại.
         continue;
       }
 
-      // CAS thành công - không ai chen ngang, an toàn để tạo hold
       const expiresAt = new Date(Date.now() + HOLD_DURATION_MS);
       const hold = await ticketHoldRepository.createHold({
         ticketTypeId: input.ticketTypeId,
@@ -76,9 +64,7 @@ export const ticketHoldService = {
       return hold;
     }
 
-    // Hết số lần retry cho phép - tranh chấp quá cao (nhiều request cùng
-    // lúc liên tục ghi đè lẫn nhau). Trả lỗi để client tự thử lại,
-    // KHÔNG retry vô hạn (tránh treo request, DoS chính server của mình).
+    holdRejectedCounter.inc({ reason: 'contention' });
     throw new AppError('Hệ thống đang bận, vui lòng thử lại sau giây lát', 409);
   },
 };

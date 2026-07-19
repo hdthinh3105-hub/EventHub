@@ -1,0 +1,16 @@
+# monitoring/prometheus.yml
+#
+# "scrape_configs" - danh sách các "target" (nơi có dữ liệu metrics)
+# mà Prometheus sẽ tự động gọi định kỳ. "app:4000" dùng đúng TÊN SERVICE
+# trong docker-compose.yml (không phải "localhost") - vì Prometheus và
+# app chạy trong 2 container KHÁC NHAU nhưng CÙNG 1 network ảo do Docker
+# Compose tự tạo, Docker có DNS nội bộ tự phân giải tên service thành
+# đúng IP container tương ứng.
+
+global:
+  scrape_interval: 10s # cứ 10 giây, Prometheus lại gọi GET /metrics 1 lần
+
+scrape_configs:
+  - job_name: 'eventhub-backend'
+    static_configs:
+      - targets: ['app:4000']
