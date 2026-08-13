@@ -2,7 +2,9 @@
 
 Backend API cho nền tảng đặt vé sự kiện (kiểu Ticketbox/Eventbrite thu nhỏ), xây dựng để luyện tập và chứng minh năng lực xử lý các bài toán backend thật: **race condition khi nhiều người tranh mua vé cuối cùng, RBAC + Resource-based Authorization, xử lý bất đồng bộ (message queue), caching, realtime, và vận hành hạ tầng (Docker/CI-CD/Monitoring)**. 
 
-**Link Demo: https://eventhub-1lf8.onrender.com**.
+**Link Demo FE: https://eventhub-fe.onrender.com**.
+
+**Link Demo BE: https://eventhub-1lf8.onrender.com**.
 
 **Link postman: https://www.postman.com/hdthinh3105/workspace/eventhub**.
 
