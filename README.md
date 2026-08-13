@@ -4,7 +4,7 @@ Backend API cho nền tảng đặt vé sự kiện (kiểu Ticketbox/Eventbrite
 
 **Link Demo: https://eventhub-1lf8.onrender.com**.
 
-**Link postman: https://hdthinh3105.postman.co/workspace/EventHub~9f33c5a2-7264-485d-910c-1ec53833855a/collection/36224551-cb6821ba-80f1-4f10-83e9-eec7d5e07944?action=share&creator=36224551&active-environment=36224551-5cd831c8-3a97-4f89-9d59-5b92e3521eca**.
+**Link postman: https://www.postman.com/hdthinh3105/workspace/eventhub**.
 
 > Dự án không phải 1 CRUD app thông thường — mỗi quyết định kỹ thuật đều xuất phát từ 1 bài toán nghiệp vụ có thật, được ghi chú ngay trong code.
 
