@@ -6,10 +6,11 @@
 // - đây là nơi bị brute-force nhiều nhất (dò mật khẩu, spam tạo tài khoản).
 
 import rateLimit from 'express-rate-limit';
+import { env } from '../config/env';
 
 export const globalRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 phút
-  max: 300, // tối đa 300 request/IP trong 15 phút cho toàn bộ API
+  max: env.RATE_LIMIT_MAX, // giới hạn theo biến môi trường (mặc định 600) - có thể tăng khi có FE realtime
   standardHeaders: true, // trả về header RateLimit-* chuẩn (RFC) để client biết còn bao nhiêu lượt
   legacyHeaders: false,
   message: { success: false, message: 'Quá nhiều request, vui lòng thử lại sau' },

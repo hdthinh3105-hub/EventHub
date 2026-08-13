@@ -234,7 +234,8 @@ Xem [`docs/API_TESTING_GUIDE.md`](./docs/API_TESTING_GUIDE.md) — body JSON m�
 | `GMAIL_USER` / `GMAIL_APP_PASSWORD` | Tài khoản Gmail dùng gửi email (App Password — dùng khi fallback SMTP hoặc local dev) |
 | `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | Cấu hình OAuth2 để gửi qua **Gmail REST API** (bắt buộc nếu chạy trên Render free tier — xem mục bên dưới). Đủ 3 biến này thì dùng REST, thiếu thì fallback SMTP |
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Thông tin Cloudinary |
-| `FRONTEND_URL` | URL Frontend (dùng tạo link trong email; project chưa có FE nên chỉ để placeholder) |
+| `FRONTEND_URL` | URL Frontend (dùng tạo link trong email; khi có FE deploy thì set đúng domain FE thật) |
+| `RATE_LIMIT_MAX` | Giới hạn request toàn API theo IP trong 15 phút (mặc định 600). FE có realtime + tải lại danh sách có thể cần tăng lên, nhưng đừng quá cao để tránh lạm dụng |
 | `ALLOWED_ORIGINS` | Danh sách domain được phép gọi API (CORS), phân cách dấu phẩy |
 
 Xem đầy đủ ràng buộc validate tại `src/config/env.ts` (dùng Zod, fail-fast nếu thiếu biến).

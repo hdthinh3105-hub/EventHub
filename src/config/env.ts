@@ -45,6 +45,11 @@ const envSchema = z.object({
   // có Frontend triển khai xong, không cần sửa lại logic gửi email.
   FRONTEND_URL: z.string().default('http://localhost:5173'),
 
+  // Giới hạn request của rate limiter toàn API (theo IP), đếm trong window
+  // 15 phút. Có thể tăng lên khi có FE realtime (Socket.IO + tải lại danh
+  // sách), nhưng đừng đặt quá cao để tránh lạm dụng.
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(600),
+
   // Danh sách domain được phép gọi API (CORS) - phân cách bởi dấu phẩy.
   // Default rỗng = cho phép tất cả (chỉ dùng khi dev), production BẮT
   // BUỘC set đúng domain FE thật, không để mặc định.
