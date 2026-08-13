@@ -1,6 +1,6 @@
 # EventHub — Nền tảng Đặt vé & Quản lý Sự kiện
 
-Backend API cho nền tảng đặt vé sự kiện (kiểu Ticketbox/Eventbrite thu nhỏ), xây dựng để luyện tập và chứng minh năng lực xử lý các bài toán backend thật: **race condition khi nhiều người tranh mua vé cuối cùng, RBAC + Resource-based Authorization, xử lý bất đồng bộ (message queue), caching, realtime, và vận hành hạ tầng (Docker/CI-CD/Monitoring). Link Demo: https://eventhub-1lf8.onrender.com**.
+Backend API cho nền tảng đặt vé sự kiện (kiểu Ticketbox/Eventbrite thu nhỏ), xây dựng để luyện tập và chứng minh năng lực xử lý các bài toán backend thật: **race condition khi nhiều người tranh mua vé cuối cùng, RBAC + Resource-based Authorization, xử lý bất đồng bộ (message queue), caching, realtime, và vận hành hạ tầng (Docker/CI-CD/Monitoring). Link Demo: https://eventhub-1lf8.onrender.com .Link postman: https://hdthinh3105.postman.co/workspace/EventHub~9f33c5a2-7264-485d-910c-1ec53833855a/collection/36224551-cb6821ba-80f1-4f10-83e9-eec7d5e07944?action=share&creator=36224551&active-environment=36224551-5cd831c8-3a97-4f89-9d59-5b92e3521eca**.
 
 > Dự án không phải 1 CRUD app thông thường — mỗi quyết định kỹ thuật đều xuất phát từ 1 bài toán nghiệp vụ có thật, được ghi chú ngay trong code.
 
