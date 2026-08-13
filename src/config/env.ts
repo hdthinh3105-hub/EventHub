@@ -28,6 +28,12 @@ const envSchema = z.object({
   RABBITMQ_URL: z.string().min(1, 'RABBITMQ_URL is required'),
   GMAIL_USER: z.string().email('GMAIL_USER phải là email hợp lệ'),
   GMAIL_APP_PASSWORD: z.string().min(1, 'GMAIL_APP_PASSWORD is required'),
+  // Gửi mail qua Gmail REST API (HTTPS port 443 — không bị Render free
+  // tier chặn như SMTP 465/587). Đủ 3 biến này thì mailer dùng REST;
+  // thiếu thì fallback về SMTP cũ.
+  GMAIL_CLIENT_ID: z.string().optional().default(''),
+  GMAIL_CLIENT_SECRET: z.string().optional().default(''),
+  GMAIL_REFRESH_TOKEN: z.string().optional().default(''),
 
   CLOUDINARY_CLOUD_NAME: z.string().min(1, 'CLOUDINARY_CLOUD_NAME is required'),
   CLOUDINARY_API_KEY: z.string().min(1, 'CLOUDINARY_API_KEY is required'),

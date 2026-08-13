@@ -19,6 +19,7 @@ Backend API cho nền tảng đặt vé sự kiện (kiểu Ticketbox/Eventbrite
 - [Tính năng chính](#tính-năng-chính)
 - [Cài đặt & Chạy thử](#cài-đặt--chạy-thử)
 - [Biến môi trường](#biến-môi-trường)
+- [Gửi email qua Gmail REST API (thay SMTP)](#gửi-email-qua-gmail-rest-api-thay-smtp)
 - [Testing](#testing)
 - [CI/CD](#cicd)
 - [Monitoring](#monitoring)
@@ -156,7 +157,7 @@ erDiagram
 | Containerization | Docker, Docker Compose (multi-stage build) | Đóng gói & triển khai |
 | CI/CD | GitHub Actions | Tự động test + deploy lên Render |
 | Monitoring | Prometheus + Grafana | Metrics: latency, tổng vé bán, tỷ lệ giữ chỗ thất bại |
-| Email | Nodemailer (Gmail SMTP) + qrcode | Gửi vé kèm ảnh QR thật |
+| Email | Gmail REST API (OAuth2, mặc định) + Nodemailer (fallback SMTP) + qrcode | Gửi vé kèm ảnh QR thật qua HTTPS, không bị Render free tier chặn |
 | Excel | ExcelJS | Export doanh thu / Import vé mời hàng loạt |
 
 ---
@@ -230,12 +231,33 @@ Xem [`docs/API_TESTING_GUIDE.md`](./docs/API_TESTING_GUIDE.md) — body JSON m�
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | Secret ký JWT, tối thiểu 32 ký tự, **khác nhau** |
 | `REDIS_URL` | Connection string Redis (Upstash, dạng `rediss://`) |
 | `RABBITMQ_URL` | Connection string RabbitMQ (CloudAMQP) |
-| `GMAIL_USER` / `GMAIL_APP_PASSWORD` | Tài khoản Gmail dùng gửi email (App Password, không phải mật khẩu thật) |
+| `GMAIL_USER` / `GMAIL_APP_PASSWORD` | Tài khoản Gmail dùng gửi email (App Password — dùng khi fallback SMTP hoặc local dev) |
+| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | Cấu hình OAuth2 để gửi qua **Gmail REST API** (bắt buộc nếu chạy trên Render free tier — xem mục bên dưới). Đủ 3 biến này thì dùng REST, thiếu thì fallback SMTP |
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Thông tin Cloudinary |
 | `FRONTEND_URL` | URL Frontend (dùng tạo link trong email; project chưa có FE nên chỉ để placeholder) |
 | `ALLOWED_ORIGINS` | Danh sách domain được phép gọi API (CORS), phân cách dấu phẩy |
 
 Xem đầy đủ ràng buộc validate tại `src/config/env.ts` (dùng Zod, fail-fast nếu thiếu biến).
+
+---
+
+## Gửi email qua Gmail REST API (thay SMTP)
+
+Từ ngày **26/09/2025**, Render **chặn outbound tới các port SMTP** (`25`, `465`, `587`) trên free tier (https://render.com/changelog/free-web-services-will-no-longer-allow-outbound-traffic-to-smtp-ports) — gây lỗi `Connection timeout` cho mọi lần gửi Gmail SMTP. `src/utils/mailer.ts` đã chuyển sang **Gmail REST API** (HTTPS port 443, không bị chặn), vẫn giữ nguyên 3 hàm `sendTicketEmail` / `sendVerificationEmail` / `sendPasswordResetEmail` (email vé kèm ảnh QR PNG dựng `multipart/related`).
+
+**Cơ chế chọn:** đủ bộ `GMAIL_CLIENT_ID` + `GMAIL_CLIENT_SECRET` + `GMAIL_REFRESH_TOKEN` → gửi qua REST API (OAuth2, tự refresh + cache access token); ngược lại → fallback SMTP cũ (thường chỉ chạy local).
+
+**Cấu hình 1 lần (lấy token):**
+
+1. **Google Cloud Console** (https://console.cloud.google.com) → tạo project → **APIs & Services → Library** → bật **Gmail API**.
+2. **OAuth consent screen** → External → thêm scope `https://www.googleapis.com/auth/gmail.send` → thêm email tài khoản Gmail của bạn vào **Test users**.
+3. **Credentials** → Create Credentials → **OAuth client ID**:
+   - Loại **Web application**: thêm redirect URI `https://developers.google.com/oauthplayground` (dùng OAuth Playground); hoặc
+   - Loại **Desktop app**: không cần redirect URI, dùng script OAuth **loopback** (`http://localhost`) cho chắc chắn.
+4. Lấy **refresh token** (OAuth Playground hoặc script loopback) → điền vào 3 biến `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN` (của **cùng 1 client** đã sinh token, và `GMAIL_USER` phải là **đúng account** có token).
+5. Thêm 3 biến này vào môi trường Render → Redeploy.
+
+Kiểm tra: log sẽ có `[Mailer] Gmail API đã chấp nhận email id=...` thay cho `Connection timeout`. Lỗi thường gặp: `invalid_grant` (token lệch scope/account), `403` (thiếu scope).
 
 ---
 
