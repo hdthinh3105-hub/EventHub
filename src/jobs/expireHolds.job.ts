@@ -13,11 +13,12 @@
 //    setInterval trong từng instance - sẽ giới thiệu ở Phase 9.
 
 import { ticketHoldRepository } from '../modules/ticket-hold/ticket-hold.repository';
+import { env } from '../config/env';
 import { logger } from '../utils/logger';
 
-const CLEANUP_INTERVAL_MS = 60 * 1000; // 1 phút
-
 export function startExpireHoldsJob() {
+  const CLEANUP_INTERVAL_MS = env.HOLD_CLEANUP_INTERVAL_MS; // mặc định 10 phút
+
   setInterval(async () => {
     try {
       const result = await ticketHoldRepository.deleteExpired();
@@ -29,5 +30,5 @@ export function startExpireHoldsJob() {
     }
   }, CLEANUP_INTERVAL_MS);
 
-  logger.info('[expireHoldsJob] Job dọn hold hết hạn đã khởi động (chạy mỗi 60s)');
+  logger.info(`[expireHoldsJob] Job dọn hold hết hạn đã khởi động (chạy mỗi ${CLEANUP_INTERVAL_MS / 1000}s)`);
 }

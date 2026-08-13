@@ -50,6 +50,12 @@ const envSchema = z.object({
   // sách), nhưng đừng đặt quá cao để tránh lạm dụng.
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(600),
 
+  // Task dọn hold hết hạn cứ mỗi N mili-giây Query DB 1 lần. 24/7 mà chạy
+  // mỗi 60s thì giữ Neon compute không bao giờ ngủ, đốt CU-hrs nhanh.
+  // Mặc định 10 phút (600000ms) - job chỉ là dọn rác; logic "available"
+  // vẫn check expiresAt lúc đọc nên không cần chạy nhanh hơn.
+  HOLD_CLEANUP_INTERVAL_MS: z.coerce.number().int().positive().default(600000),
+
   // Danh sách domain được phép gọi API (CORS) - phân cách bởi dấu phẩy.
   // Default rỗng = cho phép tất cả (chỉ dùng khi dev), production BẮT
   // BUỘC set đúng domain FE thật, không để mặc định.
