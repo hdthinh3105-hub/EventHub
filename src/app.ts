@@ -27,6 +27,14 @@ import notificationRoutes from './modules/notification/notification.route';
 
 const app: Application = express();
 
+// Render (và hầu hết cloud host) đặt app sau 1 reverse proxy -> mọi request
+// đi qua đều có header X-Forwarded-For. Nếu không bật trust proxy, biến này
+// bị express-rate-limit coi là misconfig và THROW lỗi ERR_ERL_UNEXPECTED_
+// X_FORWARDED_FOR trên TỪNG request /api (mọi API call đều 500). Bật với hop
+// đếm = 1 (chỉ tin proxy đầu tiên, vẫn chặn được spoof X-Forwarded-For) ->
+// rate limiter lấy đúng IP thật của client.
+app.set('trust proxy', 1);
+
 // --- Security middleware (bật ngay từ đầu, không đợi tới Phase Security) ---
 app.use(helmet()); // set các HTTP header an toàn (chống XSS, clickjacking cơ bản...)
 
