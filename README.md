@@ -33,7 +33,7 @@ Backend API cho nền tảng đặt vé sự kiện (kiểu Ticketbox/Eventbrite
 ## Kiến trúc tổng quan
 
 ```
-Client (Postman / socket-demo.html)
+Client (FE React / Postman)
         │
         ▼
 ┌──────────────────────────────────────────┐
@@ -151,7 +151,7 @@ erDiagram
 | Database | PostgreSQL (Neon) + Prisma ORM | Lưu trữ dữ liệu nghiệp vụ |
 | Cache | Redis (Upstash) + ioredis | Cache-Aside Pattern cho API đọc nhiều |
 | Message Queue | RabbitMQ (CloudAMQP) + amqplib | Gửi email bất đồng bộ |
-| Realtime | Socket.IO | Dashboard bán vé live cho Organizer |
+| Realtime | Socket.IO | Đẩy sự kiện realtime: vé bán, hold hết hạn, check-in, thông báo (room `event:<id>` + `user:<id>`) |
 | Object Storage | Cloudinary | Lưu ảnh bìa sự kiện |
 | Validation | Zod | Validate request, tự sinh TypeScript type |
 | Auth | JWT (access + refresh token rotation) | Xác thực + RBAC |
@@ -176,6 +176,21 @@ erDiagram
 - Cơ chế **giữ chỗ vé (TicketHold)** dùng **Optimistic Locking** (cột `version`, thuật toán CAS + retry) — đã load-test bằng `autocannon`, xác nhận **không bao giờ oversell** dù nhiều request tranh chấp đồng thời
 - Job dọn tự động hold hết hạn, transaction atomic khi checkout
 
+### Realtime (Socket.IO)
+Kênh đẩy dữ liệu trực tiếp tới client qua **WebSocket**, sử dụng mô hình **room** để định tuyến đúng người nhận:
+- Room `event:<eventId>` — dữ liệu **công khai** của 1 sự kiện (số vé còn lại, luồng check-in). Bất kỳ ai cũng vào được, kể cả **anonymous** (trang khách xem sự kiện không cần đăng nhập vẫn thấy số vé cập nhật realtime).
+- Room `user:<userId>` — dữ liệu **riêng tư** (thông báo cá nhân). Socket chỉ được join room này khi **đã xác thực bằng accessToken**; anonymous không bao giờ nhận được thông báo.
+
+**Các sự kiện realtime đang có:**
+| Sự kiện | Phát khi | Room | Ý nghĩa nghiệp vụ |
+|---|---|---|---|
+| `ticket_sold` | Thanh toán thành công | `event:<id>` | Organizer thấy toast "có vé mới bán" ngay lập tức |
+| `hold_released` | Job dọn hold hết hạn | `event:<id>` | Số vé bị giữ chỗ hết hạn được **hoàn về quỹ vé** — khách xem thấy "Còn lại" tăng lại realtime |
+| `checkin_processed` | Một vé được quét tại cổng | `event:<id>` | Mọi người đang mở trang quản lý thấy luồng khách vào sự kiện realtime |
+| `notification` | Có thông báo mới cho user (VD vé vừa bán cho sự kiện của mình) | `user:<id>` | Thông báo xuất hiện không cần F5, đồng bộ với REST `GET /api/notifications` |
+
+Socket.IO chạy **chung 1 port** với Express (`initSocket(httpServer)` trong `server.ts`), emit qua helper `emitToEvent`/`emitToUser` (guard an toàn khi server chưa init socket trong môi trường test).
+
 ### Vận hành sự kiện
 - CRUD Event/TicketType/Category/Venue với đầy đủ ràng buộc nghiệp vụ (không xóa khi đã có giao dịch, không sửa được Event đã hủy/kết thúc...)
 - Gán Staff vào Event, Check-in vé qua QR code (3 tầng phân quyền: Admin bypass / Organizer sở hữu / Staff được gán)
@@ -185,7 +200,7 @@ erDiagram
 - Cache-Aside Pattern (Redis) cho API đọc nhiều
 - Gửi email bất đồng bộ qua RabbitMQ (không chặn response API)
 - Upload ảnh qua Cloudinary
-- Dashboard realtime (Socket.IO) báo Organizer khi có vé mới bán
+- Dashboard realtime (Socket.IO): toast vé mới bán, luồng check-in, số vé hoàn trả khi hold hết hạn, và thông báo cá nhân đẩy thẳng tới Organizer
 - Full-Text Search (PostgreSQL `tsvector`/`ts_rank`, xếp hạng theo độ liên quan)
 - Audit Log ghi vết mọi thao tác nhạy cảm (đổi role, sửa/xóa Event...)
 - Rate Limiting chống brute-force
@@ -299,7 +314,7 @@ Endpoint `GET /metrics` (format Prometheus) expose:
 Trung thực về phạm vi — đây không phải hệ thống production hoàn chỉnh, mà là project luyện tập tập trung vào chiều sâu kỹ thuật:
 
 - **Render Free tier có cold start** (~30-60s sau 15 phút không có request) — chấp nhận được cho mục đích demo, không ảnh hưởng tính đúng đắn dữ liệu (đã thiết kế các cơ chế phòng thủ: hold hết hạn tự loại trừ khỏi tính toán dù job dọn dẹp có tạm dừng, RabbitMQ queue `durable` không mất message khi consumer tạm ngừng)
-- **Chưa có Frontend** — mọi luồng UX (link email, redirect sau thanh toán...) được thiết kế đúng chuẩn nhưng test qua Postman/`socket-demo.html`
+- **Realtime chưa đồng bộ hoàn hảo trạng thái đã đọc thông báo**: thông báo mới đẩy qua socket cập nhật ngay danh sách, nhưng việc chủ động emit "đã đọc" realtime chưa làm — thao tác mark-read vẫn qua REST (thiết kế có chủ đích để giữ trạng thái nhất quán ở DB)
 - **Test coverage tập trung vào logic quan trọng nhất** (race condition, middleware chain), chưa phủ hết mọi Service/Controller
 - **Chưa tích hợp**: Google Login, Swagger/OpenAPI docs — không nằm trong phạm vi cốt lõi, có thể mở rộng sau
 - **Full-Text Search dùng PostgreSQL native** thay vì Elasticsearch — quyết định có chủ đích (xem giải thích trong `event.repository.ts`), phù hợp quy mô dữ liệu vừa/nhỏ

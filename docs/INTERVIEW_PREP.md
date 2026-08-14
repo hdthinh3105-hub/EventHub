@@ -55,7 +55,15 @@ Gửi email qua SMTP mất 1-3 giây, có thể lỗi tạm thời. Gọi trực
 
 ## 12. Socket.IO — kiến trúc room và bảo mật?
 
-Mỗi Event có 1 room riêng (`event:<eventId>`) — Organizer join đúng room mình sở hữu để nhận cập nhật vé bán realtime. Xác thực JWT ngay lúc **handshake** (không cho kết nối "chui" vào rồi mới kiểm tra sau). Kênh này chỉ dùng để đẩy thông báo — dữ liệu nhạy cảm thật (doanh thu, danh sách khách hàng) vẫn phải qua REST API có đầy đủ Resource-based Authorization.
+Mỗi sự kiện realtime được định tuyến theo **2 loại room khác nhau về mức độ nhạy cảm**:
+- Room `event:<eventId>` — dữ liệu **công khai** (số vé còn lại, luồng check-in, số vé hoàn trả khi hold hết hạn). Client tự join room này khi muốn theo dõi 1 sự kiện.
+- Room `user:<userId>` — dữ liệu **riêng tư** (thông báo cá nhân: "vé mới được bán cho sự kiện của bạn"). Socket **được tự động join room này khi đã xác thực bằng accessToken lúc handshake** — anonymous không bao giờ nhận được thông báo riêng tư.
+
+**Bảo mật:** xác thực JWT ngay lúc **handshake** (không cho kết nối "chui" rồi mới kiểm tra sau). Nhưng khác thiết kế cũ — giờ có **chế độ anonymous**: trang công khai (chi tiết sự kiện) kết nối không cần token, chỉ nhận dữ liệu thuộc event room công khai. Đây là lý do dữ liệu nhạy cảm thật (doanh thu, danh sách khách hàng) vẫn **bắt buộc** phải qua REST API có đầy đủ Resource-based Authorization — WebSocket chỉ là kênh đẩy, không phải kênh đọc dữ liệu theo yêu cầu.
+
+**Các sự kiện đang phát:** `ticket_sold` (vé mới bán → event room), `hold_released` (hold hết hạn hoàn vé về quỹ → event room), `checkin_processed` (vé vừa quét tại cổng → event room), `notification` (thông báo cá nhân → user room). Emit tập trung qua helper `emitToEvent`/`emitToUser` — nếu socket chưa init (môi trường test) thì bỏ qua an toàn, không làm lỗi luồng nghiệp vụ.
+
+**Khi điều tra lỗi realtime** (câu hỏi phỏng vấn hay hỏi thêm): chia 3 tầng — (1) Client đã join đúng room chưa (log `tham gia room event:<id>`), (2) BE có emit đúng sự kiện và đúng room không (log bên cạnh mỗi emit), (3) trường hợp đáng sợ nhất: emit đúng nhưng client reconnect mất room — vì join room chỉ xảy ra **sau** sự kiện `connect`, nên nếu kết nối rớt giữa chừng phải đảm bảo client emit `join_event` lại sau khi reconnect (Socket.IO mặc định không tự động join lại room cũ).
 
 ## 13. Xử lý N+1 query khi dùng ORM?
 

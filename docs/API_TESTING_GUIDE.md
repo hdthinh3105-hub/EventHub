@@ -203,7 +203,7 @@ Không phải JSON — Body chọn **form-data**, key `image` kiểu **File**, c
 - Chỉ chính chủ hold mới checkout được (403 nếu không phải)
 - Hold hết hạn → `410 Gone` (không phải 404)
 - Checkout thành công → hold bị **xóa vĩnh viễn**, gọi lại cùng `holdId` → `404` (chống double-checkout)
-- Tự động: tăng `soldQuantity`, tạo `Order` (status `PAID`), tạo từng `Ticket` riêng kèm QR ảnh thật, gửi email qua RabbitMQ, emit Socket.IO `ticket_sold` tới room `event:<eventId>`, ghi `Notification` cho Organizer
+- Tự động: tăng `soldQuantity`, tạo `Order` (status `PAID`), tạo từng `Ticket` riêng kèm QR ảnh thật, gửi email qua RabbitMQ, emit Socket.IO `ticket_sold` tới room `event:<eventId>`, ghi + emit realtime `Notification` cho Organizer (xem mục 12)
 
 ### 8.2 Xuất báo cáo doanh thu — `GET /orders/event/:eventId/export` — ADMIN, chủ Event
 Không có body — trả về **file `.xlsx`** (Postman: Save Response → Save to a file), không phải JSON.
@@ -257,6 +257,42 @@ Body **form-data**, key `file` kiểu **File**, chọn `.xlsx` có cấu trúc:
 ### Đánh dấu đã đọc — `PATCH /notifications/:id/read`
 **Ràng buộc:** chỉ đọc được thông báo của chính mình (403 nếu cố đánh dấu thông báo người khác).
 
+**Realtime:** thông báo mới (VD "có vé mới được bán") cũng được đẩy qua Socket.IO tới room `user:<id>` — FE đang mở trang nhận được ngay, không cần gọi lại `GET /notifications` (nội dung đồng bộ với REST).
+
+---
+
+## 12. REALTIME — Socket.IO (kênh đẩy, không phải REST)
+
+Kết nối WebSocket tới chung port HTTP của server (`http://localhost:4000`, endpoint `/socket.io`). Có thể test bằng **Frontend EventHub** (`../eventhub-frontend`, chạy `npm run dev`) hoặc bất kỳ client Socket.IO nào.
+
+```
+// Ví dụ connect (client):
+const socket = io('http://localhost:4000', {
+  auth: token ? { token } : {},   // có token = đã xác thực (nhận thêm thông báo cá nhân)
+  transports: ['websocket'],
+});
+```
+
+**2 loại room:**
+- `event:<eventId>` — công khai, client tự join bằng `socket.emit('join_event', eventId)`
+- `user:<userId>` — riêng tư, BE tự động join khi socket có `accessToken` hợp lệ (không cần emit)
+
+**Bảng sự kiện:**
+
+| Sự kiện | Kích hoạt bởi API | Room | Payload demo |
+|---|---|---|---|
+| `ticket_sold` | `POST /orders/checkout` | `event:<id>` | `{ ticketTypeId, ticketTypeName, quantitySold, newSoldQuantity, totalQuantity }` |
+| `hold_released` | Job dọn hold hết hạn (chạy định kỳ) | `event:<id>` | `{ eventId, releases: [{ ticketTypeId, quantityReleased }] }` — số vé bị giữ hết hạn hoàn về quỹ |
+| `checkin_processed` | `POST /checkins` | `event:<id>` | `{ ticketId, eventId, customerName, customerEmail, checkedInAt }` |
+| `notification` | `POST /orders/checkout` (tạo thông báo cho Organizer) | `user:<id>` | `{ userId, title, message, isRead, createdAt }` |
+
+**Kiểm chứng realtime end-to-end:**
+1. Mở **2 browser tab**: tab A đăng nhập Organizer + mở trang quản lý sự kiện, tab B đăng nhập Customer.
+2. Tab B: `POST /ticket-holds` → `POST /orders/checkout`.
+3. Tab A **không F5** vẫn nhận toast/vé mới bán (`ticket_sold`) và thông báo mới (`notification`); khách xem trang chi tiết sự kiện (kể cả chưa đăng nhập) thấy số vé còn lại tự giảm.
+4. Staff quét vé tại cổng (`POST /checkins`) → tab A thấy luồng check-in realtime (`checkin_processed`), quét lại lần 2 → `409` và **không** emit thêm.
+5. Khi đủ 10 phút hold hết hạn → job dọn dẹp emit `hold_released` → số vé còn lại tự tăng trở lại.
+
 ---
 
 ## Luồng test đầy đủ (End-to-End) — chạy theo đúng thứ tự
@@ -269,12 +305,12 @@ Body **form-data**, key `file` kiểu **File**, chọn `.xlsx` có cấu trúc:
 5. POST /ticket-types/event/:eventId (Organizer, chủ Event)
 6. POST /ticket-holds (Customer, ticketTypeId từ bước 5)
 7. POST /orders/checkout (Customer, holdId từ bước 6)
-   -> kiểm tra email thật có vé + QR ảnh, kiểm tra Socket.IO nhận event
-      "ticket_sold" nếu đang mở socket-demo.html
+   -> kiểm tra email thật có vé + QR ảnh; mở trang quản lý sự kiện trên FE:
+      nhận "ticket_sold" và "notification" realtime, số vé còn lại tự giảm
 8. PATCH /users/:id/role (Admin, đổi 1 user thành STAFF)
 9. POST /event-staff/event/:eventId (Organizer, gán Staff vừa tạo)
 10. POST /checkins (Staff, qrCode lấy từ vé đã mua ở bước 7)
-    -> gọi lại lần 2 -> phải 409
+    -> FE nhận "checkin_processed" (luồng check-in realtime); gọi lại lần 2 -> phải 409
 11. GET /orders/event/:eventId/export (Organizer) -> tải file Excel, xác nhận đúng số liệu
 12. POST /orders/ticket-type/:ticketTypeId/import (Organizer, file Excel mẫu)
 ```

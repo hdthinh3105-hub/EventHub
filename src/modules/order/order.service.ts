@@ -12,7 +12,7 @@ import { AppError } from '../../utils/apiResponse';
 import { CheckoutInput } from './order.validation';
 import { JwtPayload } from '../../utils/jwt';
 import { publishTicketEmail } from '../../queues/email.queue';
-import { getIO } from '../../config/socket';
+import { getIO, emitToUser } from '../../config/socket';
 import { notificationRepository } from '../notification/notification.repository';
 import { logger } from '../../utils/logger';
 import { ticketsSoldCounter } from '../../config/metrics';
@@ -105,6 +105,21 @@ export const orderService = {
         title: 'Có vé mới được bán',
         message: `${hold.quantity} vé loại "${hold.ticketType.name}" vừa được bán cho sự kiện "${event.title}"`,
       });
+
+      try {
+        // Đẩy thông báo REALTIME cho Organizer - nhờ socket đã tự join
+        // room user:<id> lúc connect, Organizer đang mở trang quản lý
+        // sự kiện sẽ thấy thông báo xuất hiện ngay không cần F5.
+        emitToUser(event.organizerId, 'notification', {
+          userId: event.organizerId,
+          title: 'Có vé mới được bán',
+          message: `${hold.quantity} vé loại "${hold.ticketType.name}" vừa được bán cho sự kiện "${event.title}"`,
+          isRead: false,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        logger.error(`[Socket.IO] Lỗi emit notification: ${err}`);
+      }
     }
 
     return { order, tickets };

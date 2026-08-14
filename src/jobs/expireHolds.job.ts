@@ -15,15 +15,44 @@
 import { ticketHoldRepository } from '../modules/ticket-hold/ticket-hold.repository';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+import { emitToEvent } from '../config/socket';
 
 export function startExpireHoldsJob() {
   const CLEANUP_INTERVAL_MS = env.HOLD_CLEANUP_INTERVAL_MS; // mặc định 12 giờ
 
   setInterval(async () => {
     try {
+      // Lấy danh sách hold hết hạn TRƯỚC khi xóa để biết cần thông báo
+      // cho event nào / ticketType nào (số vé được hoàn trả về quỹ vé).
+      const expired = await ticketHoldRepository.findExpired();
       const result = await ticketHoldRepository.deleteExpired();
+
       if (result.count > 0) {
         logger.info(`[expireHoldsJob] Đã dọn ${result.count} hold hết hạn`);
+
+        // Gom số vé hoàn trả theo từng ticketType của từng event, rồi
+        // emit 1 sự kiện 'hold_released' cho mỗi event - trang khách xem
+        // sự kiện sẽ tăng số vé "Còn lại" lên realtime khi hold bị nhả.
+        const byEvent = new Map<string, { ticketTypeId: string; quantityReleased: number }[]>();
+        for (const h of expired) {
+          const eventId = h.ticketType.eventId;
+          const list = byEvent.get(eventId) ?? [];
+          const existing = list.find((r) => r.ticketTypeId === h.ticketTypeId);
+          if (existing) {
+            existing.quantityReleased += h.quantity;
+          } else {
+            list.push({ ticketTypeId: h.ticketTypeId, quantityReleased: h.quantity });
+          }
+          byEvent.set(eventId, list);
+        }
+
+        for (const [eventId, releases] of byEvent) {
+          try {
+            emitToEvent(eventId, 'hold_released', { eventId, releases });
+          } catch (err) {
+            logger.error(`[Socket.IO] Lỗi emit hold_released (event:${eventId}): ${err}`);
+          }
+        }
       }
     } catch (err) {
       logger.error(`[expireHoldsJob] Lỗi khi dọn hold hết hạn: ${err}`);

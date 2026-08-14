@@ -48,4 +48,19 @@ export const ticketHoldRepository = {
       where: { expiresAt: { lte: new Date() } },
     });
   },
+
+  // Trả về danh sách hold ĐÃ hết hạn kèm eventId (qua ticketType) - dùng
+  // để job dọn dẹp biết cần emit sự kiện 'hold_released' cho event nào,
+  // số vé theo ticketType nào vừa được hoàn về quỹ vé.
+  findExpired() {
+    return prisma.ticketHold.findMany({
+      where: { expiresAt: { lte: new Date() } },
+      select: {
+        id: true,
+        quantity: true,
+        ticketTypeId: true,
+        ticketType: { select: { eventId: true } },
+      },
+    });
+  },
 };

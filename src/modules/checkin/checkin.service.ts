@@ -3,6 +3,8 @@ import { checkinRepository } from './checkin.repository';
 import { eventStaffRepository } from '../event-staff/event-staff.repository';
 import { AppError } from '../../utils/apiResponse';
 import { JwtPayload } from '../../utils/jwt';
+import { emitToEvent } from '../../config/socket';
+import { logger } from '../../utils/logger';
 
 export const checkinService = {
   async checkin(qrCode: string, actor: JwtPayload) {
@@ -35,6 +37,21 @@ export const checkinService = {
     }
 
     await checkinRepository.markCheckedIn(ticket.id, actor.userId);
+
+    try {
+      // Đẩy check-in REALTIME tới room event:<id> - nơi Organizer/nhân
+      // viên khác đang mở trang quản lý sẽ nhận được luồng check-in trực
+      // tiếp (hiển thị "khách vừa vào cổng") dù họ không phải người quét.
+      emitToEvent(event.id, 'checkin_processed', {
+        ticketId: ticket.id,
+        eventId: event.id,
+        customerName: ticket.orderItem.order.user.fullName,
+        customerEmail: ticket.orderItem.order.user.email,
+        checkedInAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      logger.error(`[Socket.IO] Lỗi emit checkin_processed: ${err}`);
+    }
 
     return {
       ticketId: ticket.id,

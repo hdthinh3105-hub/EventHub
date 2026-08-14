@@ -30,12 +30,18 @@ export function initSocket(httpServer: HttpServer): SocketIOServer {
   });
 
   // Middleware xác thực NGAY LÚC HANDSHAKE (trước khi kết nối được chấp
-  // nhận) - client phải gửi kèm accessToken, không cho kết nối "chui"
-  // vào server rồi mới kiểm tra sau (tốn tài nguyên, dễ bị lạm dụng).
+  // nhận):
+  // - Có accessToken  -> xác thực như bình thường.
+  // - KHÔNG có token   -> vẫn CHO PHÉP kết nối ở chế độ "anonymous",
+  //   dùng cho các trang CÔNG KHAI (trang chi tiết sự kiện, số vé còn
+  //   lại hiển thị realtime cho MỌI khách ghé xem, không cần đăng nhập).
+  //   Anonymous chỉ vào được room event:<id> (dữ liệu công khai như số
+  //   vé còn lại, hold_released...) - KHÔNG bao giờ nhận được thông báo
+  //   riêng tư vì room user:<id> chỉ được join bởi socket có user.
   io.use((socket: AuthenticatedSocket, next) => {
     const token = socket.handshake.auth?.token as string | undefined;
     if (!token) {
-      return next(new Error('Thiếu access token'));
+      return next();
     }
     try {
       socket.user = verifyAccessToken(token);
@@ -46,7 +52,17 @@ export function initSocket(httpServer: HttpServer): SocketIOServer {
   });
 
   io.on('connection', (socket: AuthenticatedSocket) => {
-    logger.info(`[Socket.IO] Client kết nối: ${socket.id} (user: ${socket.user?.userId})`);
+    const userId = socket.user?.userId;
+    logger.info(`[Socket.IO] Client kết nối: ${socket.id} (user: ${userId ?? 'anonymous'})`);
+
+    // Socket đã xác thực tự động vào room cá nhân "user:<userId>" - nơi
+    // BE emit các sự kiện CÁ NHÂN như 'notification' (VD: "Có vé mới
+    // được bán" cho Organizer). Nhờ join sẵn ở đây, client chỉ cần kết
+    // nối là nhận được thông báo realtime, không phải tự emit join.
+    if (userId) {
+      socket.join(`user:${userId}`);
+      logger.info(`[Socket.IO] ${socket.id} đã vào room user:${userId}`);
+    }
 
     // Client tự "join" vào room của Event họ muốn theo dõi - không kiểm
     // tra quyền sở hữu chặt tại đây (để đơn giản cho demo Phase 11) vì
@@ -78,4 +94,19 @@ export function getIO(): SocketIOServer {
     throw new Error('Socket.IO chưa được khởi tạo - gọi initSocket() trước');
   }
   return io;
+}
+
+// Helper emit vào room của 1 Event - dùng ở service để tránh lặp lại
+// chuỗi room name "event:<id>" khắp nơi (đã dùng cho ticket_sold,
+// hold_released, checkin_processed...).
+export function emitToEvent(eventId: string, eventName: string, data: unknown) {
+  if (!io) return; // server chưa init socket (VD test) -> bỏ qua
+  io.to(`event:${eventId}`).emit(eventName, data);
+}
+
+// Helper emit vào room cá nhân của 1 user - dùng cho thông báo riêng
+// tư như 'notification' (chỉ Organizer sở hữu event mới nhận được).
+export function emitToUser(userId: string, eventName: string, data: unknown) {
+  if (!io) return;
+  io.to(`user:${userId}`).emit(eventName, data);
 }
