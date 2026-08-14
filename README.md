@@ -238,7 +238,7 @@ Xem [`docs/API_TESTING_GUIDE.md`](./docs/API_TESTING_GUIDE.md) — body JSON m�
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Thông tin Cloudinary |
 | `FRONTEND_URL` | URL Frontend (dùng tạo link trong email; khi có FE deploy thì set đúng domain FE thật) |
 | `RATE_LIMIT_MAX` | Giới hạn request toàn API theo IP trong 15 phút (mặc định 600). FE có realtime + tải lại danh sách có thể cần tăng lên, nhưng đừng quá cao để tránh lạm dụng |
-| `HOLD_CLEANUP_INTERVAL_MS` | Task dọn hold hết hạn chạy mỗi N ms (mặc định 600000 = 10 phút). Đừng đặt < 5 phút: chạy 24/7 mỗi 60s giữ Neon compute không ngủ, đốt CU-hrs nhanh |
+| `HOLD_CLEANUP_INTERVAL_MS` | Task dọn hold hết hạn chạy mỗi N ms (mặc định 43200000 = 12 giờ). Hold hết hạn "chết" ngay theo expiresAt nên job này chỉ dọn row cũ; chạy thường xuyên giữ Neon compute không ngủ, đốt CU-hrs |
 | `ALLOWED_ORIGINS` | Danh sách domain được phép gọi API (CORS), phân cách dấu phẩy |
 
 Xem đầy đủ ràng buộc validate tại `src/config/env.ts` (dùng Zod, fail-fast nếu thiếu biến).

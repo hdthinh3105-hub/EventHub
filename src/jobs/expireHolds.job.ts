@@ -17,7 +17,7 @@ import { env } from '../config/env';
 import { logger } from '../utils/logger';
 
 export function startExpireHoldsJob() {
-  const CLEANUP_INTERVAL_MS = env.HOLD_CLEANUP_INTERVAL_MS; // mặc định 10 phút
+  const CLEANUP_INTERVAL_MS = env.HOLD_CLEANUP_INTERVAL_MS; // mặc định 12 giờ
 
   setInterval(async () => {
     try {
